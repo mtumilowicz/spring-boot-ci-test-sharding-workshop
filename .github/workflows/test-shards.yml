@@ -1,0 +1,74 @@
+name: Test shards
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shards:
+    name: Test shard - ${{ matrix.tag }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tag:
+          - customer
+          - order
+          - payment
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run ${{ matrix.tag }} tests
+        run: ./mvnw --batch-mode test -Dgroups=${{ matrix.tag }}
+
+      - name: Upload ${{ matrix.tag }} test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-${{ matrix.tag }}
+          path: target/surefire-reports/
+          if-no-files-found: error
+
+  aggregate:
+    name: Aggregate test reports
+    if: always()
+    needs: shards
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+
+    steps:
+      - name: Download all shard reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: surefire-reports-*
+          path: combined-reports
+          merge-multiple: true
+
+      - name: Publish combined JUnit report
+        uses: dorny/test-reporter@v2
+        with:
+          name: Combined JUnit report
+          path: combined-reports/TEST-*.xml
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Preserve shard failure
+        if: needs.shards.result != 'success'
+        run: |
+          echo "At least one test shard failed."
+          exit 1

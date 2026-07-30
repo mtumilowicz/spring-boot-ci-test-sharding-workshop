@@ -52,6 +52,9 @@ jobs:
       checks: write
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Download all shard reports
         uses: actions/download-artifact@v4
         with:
@@ -68,7 +71,7 @@ jobs:
           fail-on-error: false
 
       - name: Preserve shard failure
-        if: needs.shards.result != 'success'
+        if: always() && needs.shards.result != 'success'
         run: |
           echo "At least one test shard failed."
           exit 1

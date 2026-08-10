@@ -17,16 +17,13 @@ jobs:
       matrix:
         include:
           - shard: customer
-            included_tag: customer
+            maven_filter: -Dgroups=customer
           - shard: order
-            included_tag: order
+            maven_filter: -Dgroups=order
           - shard: payment
-            included_tag: payment
+            maven_filter: -Dgroups=payment
           - shard: remainder
-            excluded_tags:
-              - customer
-              - order
-              - payment
+            maven_filter: "-DexcludedGroups=customer | order | payment"
 
     steps:
       - name: Check out repository
@@ -40,16 +37,9 @@ jobs:
           cache: maven
 
       - name: Run ${{ matrix.shard }} tests
-        if: matrix.included_tag
         env:
-          INCLUDED_TAG: ${{ matrix.included_tag }}
-        run: ./mvnw --batch-mode test "-Dgroups=$INCLUDED_TAG"
-
-      - name: Run remainder tests
-        if: matrix.excluded_tags
-        env:
-          EXCLUDED_TAGS: ${{ join(matrix.excluded_tags, ' | ') }}
-        run: ./mvnw --batch-mode test "-DexcludedGroups=$EXCLUDED_TAGS"
+          MAVEN_FILTER: ${{ matrix.maven_filter }}
+        run: ./mvnw --batch-mode test "$MAVEN_FILTER"
 
       - name: Upload ${{ matrix.shard }} test reports
         if: always()

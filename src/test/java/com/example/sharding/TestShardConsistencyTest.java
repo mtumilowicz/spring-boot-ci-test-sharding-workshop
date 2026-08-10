@@ -2,43 +2,53 @@ package com.example.sharding;
 
 import java.io.IOException;
 import java.net.URISyntaxException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import org.junit.jupiter.api.Test;
 import org.junit.platform.engine.TestTag;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClasspathRoots;
 
 class TestShardConsistencyTest {
 
     private static final Path WORKFLOW = Path.of(".github/workflows/test-shards.yml");
-
-    private static final Pattern WORKFLOW_TAG = Pattern.compile("filter: -Dgroups=([^\\s]+)");
-    private static final Pattern REMAINDER_FILTER = Pattern.compile(
-            "filter: \"-DexcludedGroups=([^\"]+)\"");
+    private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory())
+            .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     @Test
     void workflowContainsAllTestTags() throws IOException, URISyntaxException {
         Set<String> testTags = discoverTestTags();
-        String workflow = Files.readString(WORKFLOW);
-        Set<String> workflowTags = findMatches(WORKFLOW_TAG, workflow);
+        List<Shard> shards = YAML.readValue(WORKFLOW.toFile(), Workflow.class)
+                .jobs()
+                .get("shards")
+                .strategy()
+                .matrix()
+                .include();
+        Set<String> workflowTags = shards.stream()
+                .map(Shard::includedTag)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
 
         assertEquals(testTags, workflowTags, "Workflow tags must match test tags");
 
-        var remainderMatcher = REMAINDER_FILTER.matcher(workflow);
-        assertTrue(remainderMatcher.find(), "Remainder filter is missing");
-
-        Set<String> excludedTags = Arrays.stream(remainderMatcher.group(1).split("\\s*\\|\\s*"))
-                .collect(Collectors.toSet());
+        Set<String> excludedTags = shards.stream()
+                .filter(shard -> "remainder".equals(shard.shard()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Remainder shard is missing"))
+                .excludedTags();
         assertEquals(testTags, excludedTags, "Remainder must exclude every test tag");
     }
 
@@ -60,9 +70,18 @@ class TestShardConsistencyTest {
                 .collect(Collectors.toSet());
     }
 
-    private static Set<String> findMatches(Pattern pattern, String text) {
-        return pattern.matcher(text).results()
-                .map(result -> result.group(1))
-                .collect(Collectors.toSet());
+    private record Workflow(Map<String, Job> jobs) {
+    }
+
+    private record Job(Strategy strategy) {
+    }
+
+    private record Strategy(Matrix matrix) {
+    }
+
+    private record Matrix(List<Shard> include) {
+    }
+
+    private record Shard(String shard, String includedTag, Set<String> excludedTags) {
     }
 }

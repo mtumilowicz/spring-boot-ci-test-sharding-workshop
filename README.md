@@ -63,7 +63,7 @@ The tests call `GET /api/greetings/{name}` through `MockMvc`. The application an
 
 ### Current workflow
 
-The workflow stores each shard's complete Maven filter in the matrix:
+The workflow stores shard tags as structured matrix data:
 
 ```yaml
 strategy:
@@ -71,22 +71,32 @@ strategy:
   matrix:
     include:
       - shard: customer
-        filter: -Dgroups=customer
+        included_tag: customer
       - shard: order
-        filter: -Dgroups=order
+        included_tag: order
       - shard: payment
-        filter: -Dgroups=payment
+        included_tag: payment
       - shard: remainder
-        filter: "-DexcludedGroups=customer | order | payment"
+        excluded_tags:
+          - customer
+          - order
+          - payment
 
 steps:
   - name: Run ${{ matrix.shard }} tests
+    if: matrix.included_tag
     env:
-      TEST_FILTER: ${{ matrix.filter }}
-    run: ./mvnw --batch-mode test "$TEST_FILTER"
+      INCLUDED_TAG: ${{ matrix.included_tag }}
+    run: ./mvnw --batch-mode test "-Dgroups=$INCLUDED_TAG"
+
+  - name: Run remainder tests
+    if: matrix.excluded_tags
+    env:
+      EXCLUDED_TAGS: ${{ join(matrix.excluded_tags, ' | ') }}
+    run: ./mvnw --batch-mode test "-DexcludedGroups=$EXCLUDED_TAGS"
 ```
 
-The named shards use Surefire's `groups` property. The remainder excludes the union of all named shard tags:
+The named shards use Surefire's `groups` property. GitHub joins `excluded_tags` into the remainder's exclusion expression:
 
 ```shell
 ./mvnw --batch-mode test -DexcludedGroups='customer | order | payment'
@@ -99,7 +109,7 @@ The remainder therefore:
 * excludes tests already assigned to `customer`, `order`, or `payment`
 * guarantees that every Surefire-discovered test runs in at least one shard
 
-The filter is passed through an environment variable and quoted so Maven receives it as one argument.
+The tag values are passed through environment variables and quoted so Maven receives each property as one argument.
 
 ### Strictly untagged alternative
 
@@ -120,16 +130,16 @@ The current exclusion-based remainder is safer because unknown tags still execut
 
 ### Consistency contract
 
-`TestShardConsistencyTest` discovers test tags through the JUnit Platform and reads `.github/workflows/test-shards.yml` as plain text.
+`TestShardConsistencyTest` discovers test tags through the JUnit Platform and deserializes `.github/workflows/test-shards.yml` into typed records with Jackson YAML.
 
 It verifies:
 
-* the set of JUnit-discovered tags equals the set of `-Dgroups=...` workflow filters
-* the remainder filter excludes exactly that same tag set
+* the set of JUnit-discovered tags equals the set of matrix `included_tag` values
+* the remainder's `excluded_tags` equals that same tag set
 
 Untagged tests are valid and belong to the remainder. A new tagged test fails the contract until its tag is added to the workflow; a new untagged test runs without workflow changes.
 
-The workflow extraction intentionally supports only the filter format used by this repository. The check does not prevent one test from using multiple configured tags. Test classes must still match JUnit's discovery rules and use a supported test engine.
+The check does not prevent one test from using multiple configured tags. Test classes must still match JUnit's discovery rules and use a supported test engine.
 
 ## Maven commands
 
@@ -151,7 +161,7 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
 
 * shard execution
   * `matrix.include` creates the `customer`, `order`, `payment`, and `remainder` jobs
-  * each entry provides its shard name and complete Maven filter
+  * named entries provide `included_tag`; the remainder provides an `excluded_tags` list
   * `fail-fast: false` prevents one failed shard from cancelling its siblings
     * it does not suppress the failure
   * each job receives a fresh GitHub-hosted runner

@@ -20,7 +20,7 @@
   * `OrderGreetingTest` uses `@Tag("order")`
   * `PaymentGreetingTest` uses `@Tag("payment")`
   * `UntaggedGreetingTest` has no tag and runs in the remainder shard
-* contains `TestShardConsistencyTest`, which checks the workflow against discovered test tags without executing the discovered tests
+* contains `TestShardConsistencyTest`, which compares JUnit-discovered tags with the workflow configuration
 * each greeting test sleeps for 60 seconds to represent slow integration work
 * the payment test fails intentionally
   * a complete test run is therefore expected to fail
@@ -120,21 +120,16 @@ The current exclusion-based remainder is safer because unknown tags still execut
 
 ### Consistency contract
 
-`TestShardConsistencyTest` reads `.github/workflows/test-shards.yml` and uses the JUnit Platform Launcher to discover tests without executing them.
+`TestShardConsistencyTest` discovers test tags through the JUnit Platform and reads `.github/workflows/test-shards.yml` as plain text.
 
 It verifies:
 
-* matrix shard names are unique
-* exactly one remainder shard exists
-* each named shard uses `-Dgroups=<shard>`
-* the remainder excludes exactly the union of all named shard tags
-* every configured tag selects at least one discovered test
-* every discovered tag exists in the workflow
-* no discovered test has multiple configured shard tags
+* the set of JUnit-discovered tags equals the set of `-Dgroups=...` workflow filters
+* the remainder filter excludes exactly that same tag set
 
 Untagged tests are valid and belong to the remainder. A new tagged test fails the contract until its tag is added to the workflow; a new untagged test runs without workflow changes.
 
-The contract cannot recover tests that Surefire and the JUnit Platform do not discover. Test classes must still match the configured discovery rules and use a supported test engine.
+The workflow extraction intentionally supports only the filter format used by this repository. The check does not prevent one test from using multiple configured tags. Test classes must still match JUnit's discovery rules and use a supported test engine.
 
 ## Maven commands
 
@@ -223,8 +218,9 @@ Requires an authenticated [GitHub CLI](https://cli.github.com/manual/).
 * choose a remainder policy explicitly
   * the current workflow excludes configured shard tags so every discovered test runs by default
   * use `none()` only when tagged tests absent from the matrix may be skipped
-* verify exact-once execution
-  * keep `TestShardConsistencyTest` active to reject unknown, unused, or multiple shard tags
+* verify exact-once execution separately
+  * `TestShardConsistencyTest` rejects unknown, unused, or incorrectly excluded tags
+  * it does not reject a test carrying multiple configured tags
   * compare discovered tests with aggregated report entries
   * keep report paths unique because `merge-multiple: true` can overwrite equal filenames
 * rebalance shards from Surefire XML durations when one shard becomes the critical path

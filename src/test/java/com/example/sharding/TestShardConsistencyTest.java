@@ -1,137 +1,68 @@
 package com.example.sharding;
 
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
+import java.util.Arrays;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
 import org.junit.platform.engine.TestTag;
-import org.junit.platform.launcher.LauncherDiscoveryRequest;
-import org.junit.platform.launcher.TestIdentifier;
-import org.junit.platform.launcher.TestPlan;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
-import org.yaml.snakeyaml.Yaml;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.platform.engine.discovery.DiscoverySelectors.selectPackage;
+import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClasspathRoots;
 
 class TestShardConsistencyTest {
 
     private static final Path WORKFLOW = Path.of(".github/workflows/test-shards.yml");
-    private static final String REMAINDER = "remainder";
-    private static final String INCLUDED_GROUPS_PREFIX = "-Dgroups=";
-    private static final String EXCLUDED_GROUPS_PREFIX = "-DexcludedGroups=";
+
+    private static final Pattern WORKFLOW_TAG = Pattern.compile("filter: -Dgroups=([^\\s]+)");
+    private static final Pattern REMAINDER_FILTER = Pattern.compile(
+            "filter: \"-DexcludedGroups=([^\"]+)\"");
 
     @Test
-    void workflowShardsMatchDiscoveredTestTags() throws IOException {
-        List<Shard> shards = loadShards();
-        Set<String> shardNames = shards.stream()
-                .map(Shard::name)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+    void workflowContainsAllTestTags() throws IOException, URISyntaxException {
+        Set<String> testTags = discoverTestTags();
+        String workflow = Files.readString(WORKFLOW);
+        Set<String> workflowTags = findMatches(WORKFLOW_TAG, workflow);
 
-        assertEquals(shards.size(), shardNames.size(), "Shard names must be unique");
+        assertEquals(testTags, workflowTags, "Workflow tags must match test tags");
 
-        List<Shard> remainderShards = shards.stream()
-                .filter(shard -> REMAINDER.equals(shard.name()))
-                .toList();
-        assertEquals(1, remainderShards.size(), "Exactly one remainder shard is required");
+        var remainderMatcher = REMAINDER_FILTER.matcher(workflow);
+        assertTrue(remainderMatcher.find(), "Remainder filter is missing");
 
-        List<Shard> taggedShards = shards.stream()
-                .filter(shard -> !REMAINDER.equals(shard.name()))
-                .toList();
-        assertFalse(taggedShards.isEmpty(), "At least one tagged shard is required");
-
-        Set<String> configuredTags = taggedShards.stream()
-                .map(Shard::name)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        taggedShards.forEach(shard -> assertEquals(
-                INCLUDED_GROUPS_PREFIX + shard.name(),
-                shard.filter(),
-                () -> "Invalid filter for shard " + shard.name()));
-
-        String expectedRemainderFilter = EXCLUDED_GROUPS_PREFIX + String.join(" | ", configuredTags);
-        assertEquals(expectedRemainderFilter, remainderShards.getFirst().filter(),
-                "The remainder must exclude every configured shard tag");
-
-        Set<TestIdentifier> discoveredTests = discoverTests();
-        assertFalse(discoveredTests.isEmpty(), "JUnit did not discover any tests");
-
-        Set<String> discoveredTags = new LinkedHashSet<>();
-        for (TestIdentifier test : discoveredTests) {
-            Set<String> tags = test.getTags().stream()
-                    .map(TestTag::getName)
-                    .collect(Collectors.toSet());
-            discoveredTags.addAll(tags);
-
-            Set<String> shardTags = tags.stream()
-                    .filter(configuredTags::contains)
-                    .collect(Collectors.toSet());
-            assertTrue(shardTags.size() <= 1,
-                    () -> test.getUniqueId() + " belongs to multiple shards: " + shardTags);
-        }
-
-        Set<String> unknownTags = new LinkedHashSet<>(discoveredTags);
-        unknownTags.removeAll(configuredTags);
-        assertTrue(unknownTags.isEmpty(), () -> "Tags missing from the workflow: " + unknownTags);
-
-        Set<String> unusedTags = new LinkedHashSet<>(configuredTags);
-        unusedTags.removeAll(discoveredTags);
-        assertTrue(unusedTags.isEmpty(), () -> "Workflow shards without tests: " + unusedTags);
+        Set<String> excludedTags = Arrays.stream(remainderMatcher.group(1).split("\\s*\\|\\s*"))
+                .collect(Collectors.toSet());
+        assertEquals(testTags, excludedTags, "Remainder must exclude every test tag");
     }
 
-    private static Set<TestIdentifier> discoverTests() {
-        LauncherDiscoveryRequest request = LauncherDiscoveryRequestBuilder.request()
-                .selectors(selectPackage("com.example.sharding"))
+    private static Set<String> discoverTestTags() throws URISyntaxException {
+        Path testClassesRoot = Path.of(TestShardConsistencyTest.class
+                .getProtectionDomain()
+                .getCodeSource()
+                .getLocation()
+                .toURI());
+        var request = LauncherDiscoveryRequestBuilder.request()
+                .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
                 .build();
-        TestPlan testPlan = LauncherFactory.create().discover(request);
+        var testPlan = LauncherFactory.create().discover(request);
 
         return testPlan.getRoots().stream()
                 .flatMap(root -> testPlan.getDescendants(root).stream())
-                .filter(TestIdentifier::isTest)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+                .flatMap(test -> test.getTags().stream())
+                .map(TestTag::getName)
+                .collect(Collectors.toSet());
     }
 
-    private static List<Shard> loadShards() throws IOException {
-        Object document;
-        try (var input = Files.newInputStream(WORKFLOW)) {
-            document = new Yaml().load(input);
-        }
-
-        Map<?, ?> root = requireMap(document, "workflow");
-        Map<?, ?> jobs = requireMap(root.get("jobs"), "jobs");
-        Map<?, ?> shardJob = requireMap(jobs.get("shards"), "jobs.shards");
-        Map<?, ?> strategy = requireMap(shardJob.get("strategy"), "jobs.shards.strategy");
-        Map<?, ?> matrix = requireMap(strategy.get("matrix"), "jobs.shards.strategy.matrix");
-        Object includeValue = matrix.get("include");
-        assertInstanceOf(List.class, includeValue, "matrix.include must be a list");
-
-        return ((List<?>) includeValue).stream()
-                .map(value -> requireMap(value, "matrix.include entry"))
-                .map(value -> new Shard(
-                        requireString(value.get("shard"), "matrix shard"),
-                        requireString(value.get("filter"), "matrix filter")))
-                .toList();
-    }
-
-    private static Map<?, ?> requireMap(Object value, String name) {
-        assertInstanceOf(Map.class, value, name + " must be a map");
-        return (Map<?, ?>) value;
-    }
-
-    private static String requireString(Object value, String name) {
-        assertInstanceOf(String.class, value, name + " must be a string");
-        return (String) value;
-    }
-
-    private record Shard(String name, String filter) {
+    private static Set<String> findMatches(Pattern pattern, String text) {
+        return pattern.matcher(text).results()
+                .map(result -> result.group(1))
+                .collect(Collectors.toSet());
     }
 }

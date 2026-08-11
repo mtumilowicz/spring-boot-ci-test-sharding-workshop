@@ -45,7 +45,7 @@
   * tests must not depend on execution order or shared mutable state
 * balancing
   * use recorded test duration, not the number of test methods
-  * example: one 60-second test and ten 1-second tests are not balanced by assigning the same number of tests to each shard
+    * example: one 60-second test and ten 1-second tests are not balanced by assigning the same number of tests to each shard
   * the slowest shard determines when the test stage finishes
 * latency and cost
 

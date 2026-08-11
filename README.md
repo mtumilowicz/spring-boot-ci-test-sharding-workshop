@@ -148,11 +148,13 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
   * `jobs` contains independent units of work
   * `runs-on` selects the runner machine for a job
   * jobs without dependencies can run concurrently when runners are available
+    * parallel start depends on runner availability
   * `steps` run sequentially inside one job and share its checked-out workspace
   * `uses` invokes a reusable action
     * `actions/checkout` copies the repository onto the runner
     * `actions/setup-java` selects the JDK and can cache Maven dependencies
   * `run` executes a shell command such as `./mvnw --batch-mode test`
+  * `fail-fast: false` guarantees non-cancellation
 * matrices and expressions
   * `strategy.matrix` expands one job definition into one job per value or value combination
   * `${{ matrix.shard }}` reads the current matrix value
@@ -164,20 +166,12 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
   * a dependent job is normally skipped when a prerequisite fails
   * `if: always()` allows report collection to continue after success, failure, or cancellation
   * upload and download artifact actions transfer Surefire reports between isolated runners
-* current shard execution
-  * `matrix.shard` creates the `customer`, `order`, `payment`, and `unsharded` jobs
-  * each named shard requires the `sharded` marker and its matrix shard tag
-  * `unsharded` excludes the `sharded` marker
-  * each job receives a fresh GitHub-hosted runner
-  * `actions/setup-java` installs Temurin 21 and caches Maven dependencies
 * current report handling
   * every shard uploads `target/surefire-reports/` with `if: always()`
   * the aggregate job uses `needs: shards` and `if: always()` to wait for all shard jobs, including failed jobs
   * it downloads and merges the report artifacts
   * `dorny/test-reporter` publishes one combined JUnit check
   * the final step fails when any shard failed, preserving the original workflow result
-
-Parallel start depends on runner availability. `fail-fast: false` guarantees non-cancellation, not simultaneous execution.
 
 ## Spring and Testcontainers implications
 
@@ -197,11 +191,8 @@ Parallel start depends on runner availability. `fail-fast: false` guarantees non
     unsharded runner -> PostgreSQL container D
     ```
 
-  * per-class definitions, different context configurations, or `@DirtiesContext` can increase the number of starts
-  * Maven dependency caching does not cache Spring contexts, Docker containers, images, or database state
   * an external database avoids container startup but requires isolated databases or schemas for concurrent shards
 
-This repository does not include Testcontainers. These consequences apply if container-backed integration tests are added.
 
 ## Production guidance
 
@@ -210,5 +201,4 @@ This repository does not include Testcontainers. These consequences apply if con
   * the consistency test rejects missing and ambiguous dedicated shard tags
 * keep report paths unique because `merge-multiple: true` can overwrite equal filenames
 * rebalance shards from Surefire XML durations when one shard becomes the critical path
-* isolate mutable databases, queues, ports, accounts, and filesystem paths between shards
 * reduce the shard count when repeated context or container startup consumes the latency gain

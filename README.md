@@ -4,11 +4,15 @@
 
 * [JUnit 5.11.4 tagging and filtering](https://docs.junit.org/5.11.4/user-guide/index.html#writing-tests-tagging-and-filtering)
 * [JUnit 5.11.4 tag expressions](https://docs.junit.org/5.11.4/user-guide/index.html#running-tests-tag-expressions)
+* [JUnit 5.11.4 parallel execution](https://docs.junit.org/5.11.4/user-guide/index.html#writing-tests-parallel-execution)
 * [JUnit Platform Launcher API](https://docs.junit.org/5.11.4/api/org.junit.platform.launcher/org/junit/platform/launcher/Launcher.html)
 * [Maven Surefire 3.5.3: filtering JUnit tests by tags](https://maven.apache.org/surefire-archives/surefire-3.5.3/maven-surefire-plugin/examples/junit-platform.html#filtering-by-tags)
+* [GitHub Actions workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
+* [Building and testing Java with Maven](https://docs.github.com/en/actions/tutorials/build-and-test-code/java-with-maven)
 * [GitHub Actions matrix jobs](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/run-job-variations)
 * [GitHub-hosted runners](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job)
 * [GitHub Actions artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)
+* [Spring TestContext parallel execution](https://docs.spring.io/spring-framework/reference/6.2/testing/testcontext-framework/parallel-test-execution.html)
 * [Spring TestContext caching](https://docs.spring.io/spring-framework/reference/testing/testcontext-framework/ctx-management/caching.html)
 * [Testcontainers singleton lifecycle](https://java.testcontainers.org/test_framework_integration/manual_lifecycle_control/#singleton-containers)
 
@@ -19,29 +23,30 @@
   * `CustomerGreetingTest` uses `@CustomerShard`
   * `OrderGreetingTest` uses `@OrderShard`
   * `PaymentGreetingTest` uses `@PaymentShard`
-  * `UntaggedGreetingTest` has no tag and runs in the remainder shard
+  * `UntaggedGreetingTest` has no tag and runs in the unsharded test job
 * each shard annotation combines `@Tag("sharded")` with its dedicated shard tag
 * contains an untagged `TestShardConsistencyTest`, which compares dedicated shard tags with workflow shard names
+  * purpose: fail CI when a dedicated test has no matching workflow job or a workflow shard has no matching test tag
 * each greeting test sleeps for 60 seconds to represent slow integration work
 * the payment test fails intentionally
-  * a complete test run is therefore expected to fail
+  * a complete test run is therefore expected to fail to demonstrate that one shard can fail without cancelling report collection from the other shards
+  * the aggregate job still reports the workflow as failed
   * remove this failure before using the workflow as a required branch check
 
 ## Test sharding
 
-* definition
-  * a test suite `T` is divided into subsets executed by independent workers
-
-    ```text
-    T = S1 union S2 union ... union Sn
-    Si intersect Sj = empty, for i != j
-    ```
-
-* correctness requirements
-  * every Surefire-discovered test must belong to at least one selected shard
-  * every test should belong to exactly one shard unless duplicate execution is intentional
+* meaning
+  * split one test suite into smaller groups called shards
+  * execute each shard in an independent GitHub Actions job, runner, and JVM
+  * reduce wall-clock time by running the jobs at the same time
+* correctness
+  * every Surefire-discovered test must run in one job
+  * a test should not run in multiple jobs unless duplicate execution is intentional
   * tests must not depend on execution order or shared mutable state
-  * shard balance should use measured duration rather than test count
+* balancing
+  * use recorded test duration, not the number of test methods
+  * example: one 60-second test and ten 1-second tests are not balanced by assigning the same number of tests to each shard
+  * the slowest shard determines when the test stage finishes
 * latency and cost
 
   ```text
@@ -57,94 +62,117 @@
 * difference from JUnit parallel execution
   * matrix sharding uses separate jobs, runner machines, and JVMs
   * JUnit parallel execution uses concurrent threads within one Surefire test JVM
+  * JUnit parallel execution can reuse one cached Spring `ApplicationContext`
+  * to run top-level `@SpringBootTest` classes concurrently while keeping methods within each class sequential, add `src/test/resources/junit-platform.properties`
+
+    ```properties
+    junit.jupiter.execution.parallel.enabled=true
+    junit.jupiter.execution.parallel.mode.default=same_thread
+    junit.jupiter.execution.parallel.mode.classes.default=concurrent
+    ```
+
+  * do not enable parallel execution for tests that use `@DirtiesContext`, replace Spring beans with mocks, depend on execution order, or mutate shared databases, files, ports, queues, or other external state
 
 ## JUnit tag strategy
 
-### Composed shard annotations
+* composed shard annotation
+  * purpose
+    * apply the `sharded` marker and one dedicated shard name together
+    * prevent a test author from remembering two separate annotations
+  * definition
 
-Each dedicated shard has a composed JUnit annotation:
+    ```java
+    @Target({ElementType.TYPE, ElementType.METHOD})
+    @Retention(RetentionPolicy.RUNTIME)
+    @Tag("sharded")
+    @Tag("customer")
+    public @interface CustomerShard {
+    }
+    ```
 
-```java
-@Target({ElementType.TYPE, ElementType.METHOD})
-@Retention(RetentionPolicy.RUNTIME)
-@Tag("sharded")
-@Tag("customer")
-public @interface CustomerShard {
-}
-```
+  * usage
 
-`@OrderShard` and `@PaymentShard` follow the same pattern. Tests use one annotation instead of maintaining two related `@Tag` annotations:
+    ```java
+    @CustomerShard
+    class CustomerGreetingTest {
+    }
+    ```
 
-```java
-@CustomerShard
-class CustomerGreetingTest {
-}
-```
-
-The `sharded` tag separates dedicated tests from the remainder. The second tag selects the dedicated shard.
-
-### Current workflow
-
-Each matrix shard except `remainder` is a JUnit tag:
-
-```yaml
-strategy:
-  fail-fast: false
-  matrix:
-    shard:
-      - customer
-      - order
-      - payment
-      - remainder
-
-steps:
-  - name: Run ${{ matrix.shard }} tests
-    if: matrix.shard != 'remainder'
-    env:
-      SHARD: ${{ matrix.shard }}
-    run: ./mvnw --batch-mode test "-Dgroups=sharded & $SHARD"
-
-  - name: Run remainder tests
-    if: matrix.shard == 'remainder'
-    run: ./mvnw --batch-mode test -DexcludedGroups=sharded
-```
-
-The named shards require both `sharded` and the matrix shard name. The remainder excludes every test carrying `sharded`.
-
-* dedicated tests run only in their named shard
-* untagged tests run in the remainder
-* tests with unrelated JUnit tags also run in the remainder
-* the untagged consistency test fails CI when a dedicated shard is missing or unknown
-
-### Consistency contract
-
-`TestShardConsistencyTest`:
-
-* discovers tests and tags from the compiled test classpath through the JUnit Platform
-* requires every `sharded` test to have exactly one additional tag
-* deserializes `.github/workflows/test-shards.yml` with Jackson YAML
-* removes the special `remainder` value from `matrix.shard`
-* requires the dedicated shard tags to equal the remaining workflow shard names
-
-A new dedicated shard therefore requires a composed annotation and a matching `matrix.shard` entry. A raw `@Tag("sharded")` fails because it has no dedicated shard tag. Multiple additional tags also fail because shard ownership would be ambiguous.
+  * `@OrderShard` and `@PaymentShard` follow the same pattern
+  * `sharded` identifies tests assigned to dedicated jobs
+  * `customer`, `order`, or `payment` selects the dedicated job
+* unsharded tests
+  * the unsharded job excludes `sharded`
+  * it therefore runs tests with no tags and tests carrying only unrelated tags such as `slow`
+  * it also runs `TestShardConsistencyTest`
+* consistency contract
+  * JUnit Platform introspection discovers every compiled test carrying `sharded`
+  * each such test must have exactly one other tag containing its shard name
+  * Jackson YAML reads the shard names from `.github/workflows/test-shards.yml`
+  * the test removes the special `unsharded` matrix value and compares the remaining workflow values with the discovered shard tags
+  * a raw `@Tag("sharded")`, an unknown shard tag, multiple shard tags, or an unused workflow shard fails the consistency test
+  * adding a shard requires both a composed annotation and a matching matrix value
 
 ## Maven commands
+
+* `./mvnw --batch-mode verify`
+  * standard CI command for compiling, testing, packaging, and running verification checks
+  * useful for an ordinary non-sharded Maven job
+* `./mvnw --batch-mode test`
+  * runs every Surefire-discovered test
+  * expected to fail in this workshop because `PaymentGreetingTest` fails intentionally
+* `./mvnw --batch-mode test "-Dgroups=sharded & customer"`
+  * runs the `customer` dedicated shard
+  * replace `customer` with the matrix shard value
+* `./mvnw --batch-mode test -DexcludedGroups=sharded`
+  * runs tests that are not assigned to a dedicated shard
+* `./mvnw --batch-mode -Dtest=TestShardConsistencyTest test`
+  * runs only the workflow-to-tag consistency check
+* command details
+  * `./mvnw` uses the Maven version defined by the project wrapper
+  * `--batch-mode` disables interactive output and is appropriate for CI logs
+  * `groups` is Surefire's JUnit tag inclusion expression
+  * `excludedGroups` excludes tests matching a JUnit tag expression
+  * shard jobs use `test` because packaging the same application in every shard would duplicate work
 
 ## GitHub Actions workflow
 
 Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.yml)
 
-* shard execution
-  * `matrix.shard` creates the `customer`, `order`, `payment`, and `remainder` jobs
+* workflow file
+  * GitHub loads YAML workflow files from `.github/workflows/`
+  * `name` identifies the workflow in the GitHub UI
+  * `on` selects events such as `push`, `pull_request`, and manual `workflow_dispatch`
+  * `permissions` restricts the default `GITHUB_TOKEN`; grant only the access required by the jobs
+* jobs and steps
+  * `jobs` contains independent units of work
+  * `runs-on` selects the runner machine for a job
+  * jobs without dependencies can run concurrently when runners are available
+  * `steps` run sequentially inside one job and share its checked-out workspace
+  * `uses` invokes a reusable action
+    * `actions/checkout` copies the repository onto the runner
+    * `actions/setup-java` selects the JDK and can cache Maven dependencies
+  * `run` executes a shell command such as `./mvnw --batch-mode test`
+* matrices and expressions
+  * `strategy.matrix` expands one job definition into one job per value or value combination
+  * `${{ matrix.shard }}` reads the current matrix value
+  * `env` passes a value to a shell command without duplicating the command
+  * `if` conditionally executes a job or step
+  * `fail-fast: false` prevents one failed matrix job from cancelling its siblings; it does not hide the failure
+* dependencies and reports
+  * `needs` delays a job until its prerequisite jobs finish
+  * a dependent job is normally skipped when a prerequisite fails
+  * `if: always()` allows report collection to continue after success, failure, or cancellation
+  * upload and download artifact actions transfer Surefire reports between isolated runners
+* current shard execution
+  * `matrix.shard` creates the `customer`, `order`, `payment`, and `unsharded` jobs
   * each named shard requires the `sharded` marker and its matrix shard tag
-  * `remainder` excludes the `sharded` marker
-  * `fail-fast: false` prevents one failed shard from cancelling its siblings
-    * it does not suppress the failure
+  * `unsharded` excludes the `sharded` marker
   * each job receives a fresh GitHub-hosted runner
   * `actions/setup-java` installs Temurin 21 and caches Maven dependencies
-* report handling
+* current report handling
   * every shard uploads `target/surefire-reports/` with `if: always()`
-  * the aggregate job waits for all shard jobs, including failed jobs
+  * the aggregate job uses `needs: shards` and `if: always()` to wait for all shard jobs, including failed jobs
   * it downloads and merges the report artifacts
   * `dorny/test-reporter` publishes one combined JUnit check
   * the final step fails when any shard failed, preserving the original workflow result
@@ -166,7 +194,7 @@ Parallel start depends on runner availability. `fail-fast: false` guarantees non
     customer runner -> PostgreSQL container A
     order runner    -> PostgreSQL container B
     payment runner  -> PostgreSQL container C
-    remainder runner -> PostgreSQL container D
+    unsharded runner -> PostgreSQL container D
     ```
 
   * per-class definitions, different context configurations, or `@DirtiesContext` can increase the number of starts
@@ -177,8 +205,8 @@ This repository does not include Testcontainers. These consequences apply if con
 
 ## Production guidance
 
-* choose a remainder policy explicitly
-  * the current workflow excludes `sharded`, so every test without the marker enters the remainder
+* keep an unsharded catch-all job
+  * the current workflow excludes `sharded`, so every test without the marker enters the unsharded job
   * the consistency test rejects missing and ambiguous dedicated shard tags
 * keep report paths unique because `merge-multiple: true` can overwrite equal filenames
 * rebalance shards from Surefire XML durations when one shard becomes the critical path

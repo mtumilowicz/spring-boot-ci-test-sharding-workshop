@@ -175,19 +175,6 @@ Parallel start depends on runner availability. `fail-fast: false` guarantees non
 
 This repository does not include Testcontainers. These consequences apply if container-backed integration tests are added.
 
-## Operating the workflow
-
-Requires an authenticated [GitHub CLI](https://cli.github.com/manual/).
-
-| Command | Purpose |
-|---|---|
-| `gh workflow run test-shards.yml --ref <branch>` | Start a manual workflow run |
-| `gh run list --workflow=test-shards.yml --limit 5` | Find recent run IDs |
-| `gh run watch <run-id> --exit-status` | Watch a run and return its final status |
-| `gh run view <run-id> --log-failed` | Print failed-step logs |
-| `gh run download <run-id> --pattern 'surefire-reports-*' --dir combined-reports` | Download all shard reports |
-| `gh run rerun <run-id> --failed` | Rerun failed jobs and required dependencies |
-
 ## Production guidance
 
 * choose a remainder policy explicitly
@@ -197,6 +184,3 @@ Requires an authenticated [GitHub CLI](https://cli.github.com/manual/).
 * rebalance shards from Surefire XML durations when one shard becomes the critical path
 * isolate mutable databases, queues, ports, accounts, and filesystem paths between shards
 * reduce the shard count when repeated context or container startup consumes the latency gain
-* review permissions for pull requests from forks before relying on `checks: write`
-* pin third-party actions to reviewed commit SHAs when immutable dependencies are required
-* remove the intentional payment failure before making the workflow a required check

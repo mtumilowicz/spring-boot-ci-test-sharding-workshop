@@ -1,8 +1,8 @@
-package com.example.sharding;
+package sharding;
 
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.Tag;
+import sharding.shards.CustomerShard;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -14,22 +14,22 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@Tag("order")
+@CustomerShard
 @SpringBootTest
 @AutoConfigureMockMvc
-class OrderGreetingTest {
+class CustomerGreetingTest {
 
     @Autowired
     private MockMvc mockMvc;
 
     @Test
-    void greetsOrder() throws Exception {
-        var result = mockMvc.perform(get("/api/greetings/Order"));
+    void greetsCustomer() throws Exception {
+        var result = mockMvc.perform(get("/api/greetings/Customer"));
 
         TimeUnit.SECONDS.sleep(60);
 
         result.andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("application/json"))
-                .andExpect(jsonPath("$.message").value("Hello, Order!"));
+                .andExpect(jsonPath("$.message").value("Hello, Customer!"));
     }
 }

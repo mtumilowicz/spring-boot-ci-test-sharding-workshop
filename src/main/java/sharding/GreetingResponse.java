@@ -1,4 +1,4 @@
-package com.example.sharding;
+package sharding;
 
 public record GreetingResponse(String message) {
 }

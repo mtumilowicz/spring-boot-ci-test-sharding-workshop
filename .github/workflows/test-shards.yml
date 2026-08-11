@@ -36,11 +36,11 @@ jobs:
         if: matrix.shard != 'remainder'
         env:
           SHARD: ${{ matrix.shard }}
-        run: ./mvnw --batch-mode test "-Dgroups=$SHARD"
+        run: ./mvnw --batch-mode test "-Dgroups=sharded & $SHARD"
 
       - name: Run remainder tests
         if: matrix.shard == 'remainder'
-        run: ./mvnw --batch-mode test -Dgroups='none()'
+        run: ./mvnw --batch-mode test -DexcludedGroups=sharded
 
       - name: Upload ${{ matrix.shard }} test reports
         if: always()

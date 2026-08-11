@@ -1,8 +1,8 @@
-package com.example.sharding;
+package sharding;
 
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.Tag;
+import sharding.shards.PaymentShard;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -13,7 +13,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
-@Tag("payment")
+@PaymentShard
 @SpringBootTest
 @AutoConfigureMockMvc
 class PaymentGreetingTest {

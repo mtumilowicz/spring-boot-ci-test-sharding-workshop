@@ -16,11 +16,12 @@
 
 * demonstrates job-level test sharding with Java 21, Spring Boot 3.4.5, JUnit 5 tags, Maven Surefire, and a GitHub Actions matrix
 * contains four Spring Boot integration test classes
-  * `CustomerGreetingTest` uses `@Tag("customer")`
-  * `OrderGreetingTest` uses `@Tag("order")`
-  * `PaymentGreetingTest` uses `@Tag("payment")`
+  * `CustomerGreetingTest` uses `@CustomerShard`
+  * `OrderGreetingTest` uses `@OrderShard`
+  * `PaymentGreetingTest` uses `@PaymentShard`
   * `UntaggedGreetingTest` has no tag and runs in the remainder shard
-* contains an untagged `TestShardConsistencyTest`, which compares JUnit-discovered tags with workflow shard names
+* each shard annotation combines `@Tag("sharded")` with its dedicated shard tag
+* contains an untagged `TestShardConsistencyTest`, which compares dedicated shard tags with workflow shard names
 * each greeting test sleeps for 60 seconds to represent slow integration work
 * the payment test fails intentionally
   * a complete test run is therefore expected to fail
@@ -61,6 +62,29 @@ The tests call `GET /api/greetings/{name}` through `MockMvc`. The application an
 
 ## JUnit tag strategy
 
+### Composed shard annotations
+
+Each dedicated shard has a composed JUnit annotation:
+
+```java
+@Target({ElementType.TYPE, ElementType.METHOD})
+@Retention(RetentionPolicy.RUNTIME)
+@Tag("sharded")
+@Tag("customer")
+public @interface CustomerShard {
+}
+```
+
+`@OrderShard` and `@PaymentShard` follow the same pattern. Tests use one annotation instead of maintaining two related `@Tag` annotations:
+
+```java
+@CustomerShard
+class CustomerGreetingTest {
+}
+```
+
+The `sharded` tag separates dedicated tests from the remainder. The second tag selects the dedicated shard.
+
 ### Current workflow
 
 Each matrix shard except `remainder` is a JUnit tag:
@@ -80,57 +104,41 @@ steps:
     if: matrix.shard != 'remainder'
     env:
       SHARD: ${{ matrix.shard }}
-    run: ./mvnw --batch-mode test "-Dgroups=$SHARD"
+    run: ./mvnw --batch-mode test "-Dgroups=sharded & $SHARD"
 
   - name: Run remainder tests
     if: matrix.shard == 'remainder'
-    run: ./mvnw --batch-mode test -Dgroups='none()'
+    run: ./mvnw --batch-mode test -DexcludedGroups=sharded
 ```
 
-The named shards pass their names to Surefire's `groups` property. The remainder uses JUnit's `none()` expression.
+The named shards require both `sharded` and the matrix shard name. The remainder excludes every test carrying `sharded`.
 
+* dedicated tests run only in their named shard
 * untagged tests run in the remainder
-* a tag absent from the matrix is not executed
-* the untagged consistency test fails CI when such a tag exists
+* tests with unrelated JUnit tags also run in the remainder
+* the untagged consistency test fails CI when a dedicated shard is missing or unknown
 
 ### Consistency contract
 
 `TestShardConsistencyTest`:
 
-* discovers tags from the compiled test classpath through the JUnit Platform
+* discovers tests and tags from the compiled test classpath through the JUnit Platform
+* requires every `sharded` test to have exactly one additional tag
 * deserializes `.github/workflows/test-shards.yml` with Jackson YAML
 * removes the special `remainder` value from `matrix.shard`
-* requires the discovered tag set to equal the remaining shard names
+* requires the dedicated shard tags to equal the remaining workflow shard names
 
-A new `@Tag("inventory")` therefore fails CI until `inventory` is added to `matrix.shard`. The contract does not prevent one test from carrying multiple configured tags.
-
-### Exclusion-based remainder alternative
-
-The remainder can instead exclude the union of configured tags:
-
-```shell
-./mvnw --batch-mode test -DexcludedGroups='customer | order | payment'
-```
-
-This alternative:
-
-* includes untagged tests
-* includes a test carrying only a tag absent from the matrix
-* excludes tests already assigned to `customer`, `order`, or `payment`
-* guarantees that every Surefire-discovered test runs in at least one shard
-
-It requires repeating the configured tag union in the remainder command. The current `none()` design avoids that duplication and uses the consistency test to reject unknown tags.
+A new dedicated shard therefore requires a composed annotation and a matching `matrix.shard` entry. A raw `@Tag("sharded")` fails because it has no dedicated shard tag. Multiple additional tags also fail because shard ownership would be ambiguous.
 
 ## Maven commands
 
 | Command | Selection | Expected result in this project |
 |---|---|---|
 | `./mvnw --batch-mode test` | All discovered tests | at least 240 s plus setup; exit `1` |
-| `./mvnw --batch-mode test -Dgroups=customer` | `customer` shard | approximately 60 s plus setup; exit `0` |
-| `./mvnw --batch-mode test -Dgroups=order` | `order` shard | approximately 60 s plus setup; exit `0` |
-| `./mvnw --batch-mode test -Dgroups=payment` | `payment` shard | approximately 60 s plus setup; exit `1` |
-| `./mvnw --batch-mode test -Dgroups='none()'` | Current remainder shard | approximately 60 s plus setup; exit `0` |
-| `./mvnw --batch-mode test -DexcludedGroups='customer \| order \| payment'` | Exclusion-based remainder alternative | approximately 60 s plus setup; exit `0` |
+| `./mvnw --batch-mode test -Dgroups='sharded & customer'` | `customer` shard | approximately 60 s plus setup; exit `0` |
+| `./mvnw --batch-mode test -Dgroups='sharded & order'` | `order` shard | approximately 60 s plus setup; exit `0` |
+| `./mvnw --batch-mode test -Dgroups='sharded & payment'` | `payment` shard | approximately 60 s plus setup; exit `1` |
+| `./mvnw --batch-mode test -DexcludedGroups=sharded` | Remainder shard | approximately 60 s plus setup; exit `0` |
 | `./mvnw --batch-mode -Dtest=TestShardConsistencyTest test` | Workflow consistency contract | less than one second of test execution; exit `0` |
 
 `./mvnw` uses the repository-defined Maven distribution. `--batch-mode` disables interactive output. Surefire writes XML and text reports to `target/surefire-reports/`.
@@ -141,8 +149,8 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
 
 * shard execution
   * `matrix.shard` creates the `customer`, `order`, `payment`, and `remainder` jobs
-  * each named shard is passed directly to Surefire as a JUnit tag
-  * `remainder` selects untagged tests with `none()`
+  * each named shard requires the `sharded` marker and its matrix shard tag
+  * `remainder` excludes the `sharded` marker
   * `fail-fast: false` prevents one failed shard from cancelling its siblings
     * it does not suppress the failure
   * each job receives a fresh GitHub-hosted runner
@@ -207,11 +215,9 @@ Requires an authenticated [GitHub CLI](https://cli.github.com/manual/).
 ## Production guidance
 
 * choose a remainder policy explicitly
-  * the current workflow uses `none()` and fails consistency when a tag is absent from the matrix
-  * use `excludedGroups` when unknown tagged tests must execute in the remainder
-* verify exact-once execution separately because Surefire does not reject a test carrying multiple configured tags
-  * compare discovered tests with aggregated report entries
-  * keep report paths unique because `merge-multiple: true` can overwrite equal filenames
+  * the current workflow excludes `sharded`, so every test without the marker enters the remainder
+  * the consistency test rejects missing and ambiguous dedicated shard tags
+* keep report paths unique because `merge-multiple: true` can overwrite equal filenames
 * rebalance shards from Surefire XML durations when one shard becomes the critical path
 * isolate mutable databases, queues, ports, accounts, and filesystem paths between shards
 * reduce the shard count when repeated context or container startup consumes the latency gain

@@ -1,4 +1,4 @@
-package com.example.sharding;
+package sharding;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;

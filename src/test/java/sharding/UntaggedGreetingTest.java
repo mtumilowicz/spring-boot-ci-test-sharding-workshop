@@ -1,4 +1,4 @@
-package com.example.sharding;
+package sharding;
 
 import java.util.concurrent.TimeUnit;
 

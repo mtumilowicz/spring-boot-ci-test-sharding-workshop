@@ -1,5 +1,6 @@
-package com.example.sharding;
+package sharding.consistency;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Map;
@@ -11,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import org.junit.jupiter.api.Test;
 import org.junit.platform.engine.TestTag;
+import org.junit.platform.launcher.TestIdentifier;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
 
@@ -20,27 +22,37 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
 
 class TestShardConsistencyTest {
 
+    private static final String SHARDED_TAG = "sharded";
     private static final Path WORKFLOW = Path.of(".github/workflows/test-shards.yml");
     private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory())
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     @Test
     void testTagsMatchWorkflowShards() throws Exception {
-        Workflow workflow = YAML.readValue(WORKFLOW.toFile(), Workflow.class);
-        Set<String> workflowShardTags = new HashSet<>(workflow.jobs()
-                .get("shards")
-                .strategy()
-                .matrix()
-                .shard());
+        Set<String> workflowShardTags = findWorkflowShardTags();
 
         assertTrue(workflowShardTags.contains("remainder"), "Remainder shard is missing");
         workflowShardTags.remove("remainder");
 
-        assertEquals(findJUnitTags(), workflowShardTags,
-                "JUnit tags must match configured shards");
+        Set<String> junitShardTags = findTestsTaggedAsSharded().stream()
+                .map(TestShardConsistencyTest::findShardNameTag)
+                .collect(Collectors.toSet());
+
+        assertEquals(workflowShardTags, junitShardTags,
+                "Dedicated shard tags must match configured shards");
     }
 
-    private static Set<String> findJUnitTags() throws Exception {
+    private static Set<String> findWorkflowShardTags() throws IOException {
+        Workflow workflow = YAML.readValue(WORKFLOW.toFile(), Workflow.class);
+
+        return new HashSet<>(workflow.jobs()
+                .get("shards")
+                .strategy()
+                .matrix()
+                .shard());
+    }
+
+    private static Set<TestIdentifier> findTestsTaggedAsSharded() throws Exception {
         Path testClassesRoot = Path.of(TestShardConsistencyTest.class
                 .getProtectionDomain()
                 .getCodeSource()
@@ -53,9 +65,24 @@ class TestShardConsistencyTest {
 
         return testPlan.getRoots().stream()
                 .flatMap(root -> testPlan.getDescendants(root).stream())
-                .flatMap(test -> test.getTags().stream())
-                .map(TestTag::getName)
+                .filter(TestIdentifier::isTest)
+                .filter(test -> test.getTags().stream()
+                        .map(TestTag::getName)
+                        .anyMatch(SHARDED_TAG::equals))
                 .collect(Collectors.toSet());
+    }
+
+    private static String findShardNameTag(TestIdentifier test) {
+        Set<String> shardTags = test.getTags().stream()
+                .map(TestTag::getName)
+                .filter(tag -> !SHARDED_TAG.equals(tag))
+                .collect(Collectors.toSet());
+
+        assertEquals(1, shardTags.size(),
+                () -> "Sharded test must have exactly one dedicated shard tag: "
+                        + test.getDisplayName());
+
+        return shardTags.iterator().next();
     }
 
     private record Workflow(Map<String, Job> jobs) {

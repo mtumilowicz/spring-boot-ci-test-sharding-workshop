@@ -4,6 +4,7 @@
 
 * [JUnit 5.11.4 tagging and filtering](https://docs.junit.org/5.11.4/user-guide/index.html#writing-tests-tagging-and-filtering)
 * [JUnit 5.11.4 tag expressions](https://docs.junit.org/5.11.4/user-guide/index.html#running-tests-tag-expressions)
+* [JUnit Platform Launcher API](https://docs.junit.org/5.11.4/api/org.junit.platform.launcher/org/junit/platform/launcher/Launcher.html)
 * [Maven Surefire 3.5.3: filtering JUnit tests by tags](https://maven.apache.org/surefire-archives/surefire-3.5.3/maven-surefire-plugin/examples/junit-platform.html#filtering-by-tags)
 * [GitHub Actions matrix jobs](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/run-job-variations)
 * [GitHub-hosted runners](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job)
@@ -19,6 +20,7 @@
   * `OrderGreetingTest` uses `@Tag("order")`
   * `PaymentGreetingTest` uses `@Tag("payment")`
   * `UntaggedGreetingTest` has no tag and runs in the remainder shard
+* contains an untagged `TestShardConsistencyTest`, which compares JUnit-discovered tags with workflow shard names
 * each greeting test sleeps for 60 seconds to represent slow integration work
 * the payment test fails intentionally
   * a complete test run is therefore expected to fail
@@ -61,60 +63,63 @@ The tests call `GET /api/greetings/{name}` through `MockMvc`. The application an
 
 ### Current workflow
 
-The workflow stores one Maven filter per matrix entry:
+Each matrix shard except `remainder` is a JUnit tag:
 
 ```yaml
 strategy:
   fail-fast: false
   matrix:
-    include:
-      - shard: customer
-        maven_filter: -Dgroups=customer
-      - shard: order
-        maven_filter: -Dgroups=order
-      - shard: payment
-        maven_filter: -Dgroups=payment
-      - shard: remainder
-        maven_filter: "-DexcludedGroups=customer | order | payment"
+    shard:
+      - customer
+      - order
+      - payment
+      - remainder
 
 steps:
   - name: Run ${{ matrix.shard }} tests
+    if: matrix.shard != 'remainder'
     env:
-      MAVEN_FILTER: ${{ matrix.maven_filter }}
-    run: ./mvnw --batch-mode test "$MAVEN_FILTER"
+      SHARD: ${{ matrix.shard }}
+    run: ./mvnw --batch-mode test "-Dgroups=$SHARD"
+
+  - name: Run remainder tests
+    if: matrix.shard == 'remainder'
+    run: ./mvnw --batch-mode test -Dgroups='none()'
 ```
 
-The named shards use Surefire's `groups` property. The remainder uses `excludedGroups`:
+The named shards pass their names to Surefire's `groups` property. The remainder uses JUnit's `none()` expression.
+
+* untagged tests run in the remainder
+* a tag absent from the matrix is not executed
+* the untagged consistency test fails CI when such a tag exists
+
+### Consistency contract
+
+`TestShardConsistencyTest`:
+
+* discovers tags from the compiled test classpath through the JUnit Platform
+* deserializes `.github/workflows/test-shards.yml` with Jackson YAML
+* removes the special `remainder` value from `matrix.shard`
+* requires the discovered tag set to equal the remaining shard names
+
+A new `@Tag("inventory")` therefore fails CI until `inventory` is added to `matrix.shard`. The contract does not prevent one test from carrying multiple configured tags.
+
+### Exclusion-based remainder alternative
+
+The remainder can instead exclude the union of configured tags:
 
 ```shell
 ./mvnw --batch-mode test -DexcludedGroups='customer | order | payment'
 ```
 
-The remainder therefore:
+This alternative:
 
-* includes untagged tests such as `UntaggedGreetingTest`
+* includes untagged tests
 * includes a test carrying only a tag absent from the matrix
 * excludes tests already assigned to `customer`, `order`, or `payment`
 * guarantees that every Surefire-discovered test runs in at least one shard
 
-The filter is passed through an environment variable and quoted so Maven receives it as one argument.
-
-### Strictly untagged alternative
-
-JUnit provides the special tag expression `none()`, which selects tests without any tags:
-
-```shell
-./mvnw --batch-mode test -Dgroups='none()'
-```
-
-This expression could replace the current remainder filter.
-
-* includes tests with no tags
-* excludes every tagged test
-* does not catch a test whose only tag is absent from the matrix
-  * example: `@Tag("inventory")` remains skipped when no `inventory` shard exists
-
-The current exclusion-based remainder is safer because tests with unknown tags still execute without workflow changes.
+It requires repeating the configured tag union in the remainder command. The current `none()` design avoids that duplication and uses the consistency test to reject unknown tags.
 
 ## Maven commands
 
@@ -124,8 +129,9 @@ The current exclusion-based remainder is safer because tests with unknown tags s
 | `./mvnw --batch-mode test -Dgroups=customer` | `customer` shard | approximately 60 s plus setup; exit `0` |
 | `./mvnw --batch-mode test -Dgroups=order` | `order` shard | approximately 60 s plus setup; exit `0` |
 | `./mvnw --batch-mode test -Dgroups=payment` | `payment` shard | approximately 60 s plus setup; exit `1` |
-| `./mvnw --batch-mode test -Dgroups='none()'` | Strictly untagged tests | approximately 60 s plus setup; exit `0` |
-| `./mvnw --batch-mode test -DexcludedGroups='customer \| order \| payment'` | Current remainder shard | approximately 60 s plus setup; exit `0` |
+| `./mvnw --batch-mode test -Dgroups='none()'` | Current remainder shard | approximately 60 s plus setup; exit `0` |
+| `./mvnw --batch-mode test -DexcludedGroups='customer \| order \| payment'` | Exclusion-based remainder alternative | approximately 60 s plus setup; exit `0` |
+| `./mvnw --batch-mode -Dtest=TestShardConsistencyTest test` | Workflow consistency contract | less than one second of test execution; exit `0` |
 
 `./mvnw` uses the repository-defined Maven distribution. `--batch-mode` disables interactive output. Surefire writes XML and text reports to `target/surefire-reports/`.
 
@@ -134,8 +140,9 @@ The current exclusion-based remainder is safer because tests with unknown tags s
 Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.yml)
 
 * shard execution
-  * `matrix.include` creates the `customer`, `order`, `payment`, and `remainder` jobs
-  * each entry provides one Maven Surefire filter
+  * `matrix.shard` creates the `customer`, `order`, `payment`, and `remainder` jobs
+  * each named shard is passed directly to Surefire as a JUnit tag
+  * `remainder` selects untagged tests with `none()`
   * `fail-fast: false` prevents one failed shard from cancelling its siblings
     * it does not suppress the failure
   * each job receives a fresh GitHub-hosted runner
@@ -156,7 +163,7 @@ workflow run
 |-- customer runner -> Maven -> Surefire JVM -> Spring context
 |-- order runner    -> Maven -> Surefire JVM -> Spring context
 |-- payment runner  -> Maven -> Surefire JVM -> Spring context
-|-- remainder runner -> Maven -> Surefire JVM -> Spring context
+|-- remainder runner -> Maven -> Surefire JVM -> Spring context and consistency contract
 +-- aggregate runner -> downloaded XML reports -> GitHub check
 ```
 
@@ -200,8 +207,8 @@ Requires an authenticated [GitHub CLI](https://cli.github.com/manual/).
 ## Production guidance
 
 * choose a remainder policy explicitly
-  * the current workflow excludes configured shard tags so every discovered test runs by default
-  * use `none()` only when tagged tests absent from the matrix may be skipped
+  * the current workflow uses `none()` and fails consistency when a tag is absent from the matrix
+  * use `excludedGroups` when unknown tagged tests must execute in the remainder
 * verify exact-once execution separately because Surefire does not reject a test carrying multiple configured tags
   * compare discovered tests with aggregated report entries
   * keep report paths unique because `merge-multiple: true` can overwrite equal filenames

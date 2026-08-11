@@ -15,15 +15,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - shard: customer
-            maven_filter: -Dgroups=customer
-          - shard: order
-            maven_filter: -Dgroups=order
-          - shard: payment
-            maven_filter: -Dgroups=payment
-          - shard: remainder
-            maven_filter: "-DexcludedGroups=customer | order | payment"
+        shard:
+          - customer
+          - order
+          - payment
+          - remainder
 
     steps:
       - name: Check out repository
@@ -37,9 +33,14 @@ jobs:
           cache: maven
 
       - name: Run ${{ matrix.shard }} tests
+        if: matrix.shard != 'remainder'
         env:
-          MAVEN_FILTER: ${{ matrix.maven_filter }}
-        run: ./mvnw --batch-mode test "$MAVEN_FILTER"
+          SHARD: ${{ matrix.shard }}
+        run: ./mvnw --batch-mode test "-Dgroups=$SHARD"
+
+      - name: Run remainder tests
+        if: matrix.shard == 'remainder'
+        run: ./mvnw --batch-mode test -Dgroups='none()'
 
       - name: Upload ${{ matrix.shard }} test reports
         if: always()

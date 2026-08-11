@@ -1,4 +1,4 @@
-package sharding.consistency;
+package sharding.shards;
 
 import java.io.IOException;
 import java.nio.file.Path;

@@ -27,8 +27,6 @@
   * a complete test run is therefore expected to fail
   * remove this failure before using the workflow as a required branch check
 
-The tests call `GET /api/greetings/{name}` through `MockMvc`. The application and Spring context run inside the Surefire test JVM; no HTTP server port is opened.
-
 ## Test sharding
 
 * definition
@@ -131,17 +129,6 @@ The named shards require both `sharded` and the matrix shard name. The remainder
 A new dedicated shard therefore requires a composed annotation and a matching `matrix.shard` entry. A raw `@Tag("sharded")` fails because it has no dedicated shard tag. Multiple additional tags also fail because shard ownership would be ambiguous.
 
 ## Maven commands
-
-| Command | Selection | Expected result in this project |
-|---|---|---|
-| `./mvnw --batch-mode test` | All discovered tests | at least 240 s plus setup; exit `1` |
-| `./mvnw --batch-mode test -Dgroups='sharded & customer'` | `customer` shard | approximately 60 s plus setup; exit `0` |
-| `./mvnw --batch-mode test -Dgroups='sharded & order'` | `order` shard | approximately 60 s plus setup; exit `0` |
-| `./mvnw --batch-mode test -Dgroups='sharded & payment'` | `payment` shard | approximately 60 s plus setup; exit `1` |
-| `./mvnw --batch-mode test -DexcludedGroups=sharded` | Remainder shard | approximately 60 s plus setup; exit `0` |
-| `./mvnw --batch-mode -Dtest=TestShardConsistencyTest test` | Workflow consistency contract | less than one second of test execution; exit `0` |
-
-`./mvnw` uses the repository-defined Maven distribution. `--batch-mode` disables interactive output. Surefire writes XML and text reports to `target/surefire-reports/`.
 
 ## GitHub Actions workflow
 

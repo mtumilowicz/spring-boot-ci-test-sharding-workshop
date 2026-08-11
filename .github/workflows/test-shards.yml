@@ -19,7 +19,7 @@ jobs:
           - customer
           - order
           - payment
-          - remainder
+          - unsharded
 
     steps:
       - name: Check out repository
@@ -33,13 +33,13 @@ jobs:
           cache: maven
 
       - name: Run ${{ matrix.shard }} tests
-        if: matrix.shard != 'remainder'
+        if: matrix.shard != 'unsharded'
         env:
           SHARD: ${{ matrix.shard }}
         run: ./mvnw --batch-mode test "-Dgroups=sharded & $SHARD"
 
-      - name: Run remainder tests
-        if: matrix.shard == 'remainder'
+      - name: Run unsharded tests
+        if: matrix.shard == 'unsharded'
         run: ./mvnw --batch-mode test -DexcludedGroups=sharded
 
       - name: Upload ${{ matrix.shard }} test reports

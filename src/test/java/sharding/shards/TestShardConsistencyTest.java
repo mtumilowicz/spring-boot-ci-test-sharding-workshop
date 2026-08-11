@@ -31,8 +31,8 @@ class TestShardConsistencyTest {
     void testTagsMatchWorkflowShards() throws Exception {
         Set<String> workflowShardTags = findWorkflowShardTags();
 
-        assertTrue(workflowShardTags.contains("remainder"), "Remainder shard is missing");
-        workflowShardTags.remove("remainder");
+        assertTrue(workflowShardTags.contains("unsharded"), "Unsharded test job is missing");
+        workflowShardTags.remove("unsharded");
 
         Set<String> junitShardTags = findTestsTaggedAsSharded().stream()
                 .map(TestShardConsistencyTest::findShardNameTag)

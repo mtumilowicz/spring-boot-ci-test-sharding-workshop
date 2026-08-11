@@ -151,17 +151,6 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
 
 Parallel start depends on runner availability. `fail-fast: false` guarantees non-cancellation, not simultaneous execution.
 
-The current process topology is:
-
-```text
-workflow run
-|-- customer runner -> Maven -> Surefire JVM -> Spring context
-|-- order runner    -> Maven -> Surefire JVM -> Spring context
-|-- payment runner  -> Maven -> Surefire JVM -> Spring context
-|-- remainder runner -> Maven -> Surefire JVM -> Spring context and consistency contract
-+-- aggregate runner -> downloaded XML reports -> GitHub check
-```
-
 ## Spring and Testcontainers implications
 
 * Spring context caching

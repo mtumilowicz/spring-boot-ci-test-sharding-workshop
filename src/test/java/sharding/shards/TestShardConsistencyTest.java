@@ -67,7 +67,6 @@ class TestShardConsistencyTest {
 
         return testPlan.getRoots().stream()
                 .flatMap(root -> testPlan.getDescendants(root).stream())
-                .filter(TestIdentifier::isTest)
                 .filter(test -> test.getTags().stream()
                         .map(TestTag::getName)
                         .anyMatch(SHARDED_TAG::equals))

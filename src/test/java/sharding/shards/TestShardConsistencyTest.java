@@ -31,7 +31,8 @@ class TestShardConsistencyTest {
     void testTagsMatchWorkflowShards() throws Exception {
         Set<String> workflowShardTags = findWorkflowShardTags();
 
-        assertTrue(workflowShardTags.contains("unsharded"), "Unsharded test job is missing");
+        assertTrue(workflowShardTags.contains("unsharded"),
+                () -> "Unsharded test job is missing. Workflow shards: " + workflowShardTags);
         workflowShardTags.remove("unsharded");
 
         Set<String> junitShardTags = findTestsTaggedAsSharded().stream()
@@ -39,7 +40,8 @@ class TestShardConsistencyTest {
                 .collect(Collectors.toSet());
 
         assertEquals(workflowShardTags, junitShardTags,
-                "Dedicated shard tags must match configured shards");
+                () -> "Dedicated shard tags must match configured shards. Workflow shards: "
+                        + workflowShardTags + "; test shard tags: " + junitShardTags);
     }
 
     private static Set<String> findWorkflowShardTags() throws IOException {
@@ -73,14 +75,16 @@ class TestShardConsistencyTest {
     }
 
     private static String findShardNameTag(TestIdentifier test) {
-        Set<String> shardTags = test.getTags().stream()
+        Set<String> allTags = test.getTags().stream()
                 .map(TestTag::getName)
+                .collect(Collectors.toSet());
+        Set<String> shardTags = allTags.stream()
                 .filter(tag -> !SHARDED_TAG.equals(tag))
                 .collect(Collectors.toSet());
 
         assertEquals(1, shardTags.size(),
                 () -> "Sharded test must have exactly one dedicated shard tag: "
-                        + test.getDisplayName());
+                        + test.getDisplayName() + "; tags: " + allTags);
 
         return shardTags.iterator().next();
     }

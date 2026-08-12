@@ -15,6 +15,7 @@
 * [Spring TestContext parallel execution](https://docs.spring.io/spring-framework/reference/6.2/testing/testcontext-framework/parallel-test-execution.html)
 * [Spring TestContext caching](https://docs.spring.io/spring-framework/reference/testing/testcontext-framework/ctx-management/caching.html)
 * [Testcontainers singleton lifecycle](https://java.testcontainers.org/test_framework_integration/manual_lifecycle_control/#singleton-containers)
+* [Quarkus test class-loading changes](https://quarkus.io/blog/test-classloading-rewrite/)
 
 ## Workshop purpose
 
@@ -192,6 +193,20 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
     ```
 
   * an external database avoids container startup but requires isolated databases or schemas for concurrent shards
+* nested JUnit discovery
+  * `TestShardConsistencyTest` calls `Launcher.discover()` to inspect every compiled test
+  * discovery invokes registered JUnit test engines and may load test classes; it is not equivalent to reading class files without running test-framework code
+  * with ordinary Spring Boot tests, discovery does not execute `@SpringBootTest`, create the application context, run lifecycle callbacks, or start containers managed by the Testcontainers JUnit extension
+  * discovery can still trigger infrastructure when class loading or a custom extension has side effects
+
+    ```java
+    static PostgreSQLContainer<?> postgres =
+            new PostgreSQLContainer<>("postgres:17").start();
+    ```
+
+  * avoid starting containers or other infrastructure in static initializers
+  * this design is unsuitable for Quarkus 3.22 and later because Quarkus performs augmentation during JUnit discovery and starts Dev Services in that phase
+    * consequence: running `TestShardConsistencyTest` in such a Quarkus project may start Dev Services and containers, making a consistency check slow, dependent on Docker and external resources, or unable to run in restricted environments
 
 
 ## Production guidance

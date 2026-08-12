@@ -206,7 +206,8 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
 
   * avoid starting containers or other infrastructure in static initializers
   * this design is unsuitable for Quarkus 3.22 and later because Quarkus performs augmentation during JUnit discovery and starts Dev Services in that phase
-    * consequence: running `TestShardConsistencyTest` in such a Quarkus project may start Dev Services and containers, making a consistency check slow, dependent on Docker and external resources, or unable to run in restricted environments
+    * augmentation is Quarkus's build-time preparation phase, where it analyzes the application and extensions and creates the metadata and generated code needed to run the application
+  * consequence: running `TestShardConsistencyTest` in such a Quarkus project may start Dev Services and containers, making a consistency check slow, dependent on Docker and external resources, or unable to run in restricted environments
 
 
 ## Production guidance

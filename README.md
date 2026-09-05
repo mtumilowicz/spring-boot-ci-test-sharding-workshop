@@ -40,30 +40,28 @@
 
 * meaning
   * split one test suite into smaller groups called shards
+    * in particular: every Surefire-discovered test must run in exactly one job unless duplicate execution is intentional
   * execute each shard in an independent GitHub Actions job, runner, and JVM
   * reduce wall-clock time by running the jobs at the same time
-* correctness
-  * every Surefire-discovered test must run in exactly one job unless duplicate execution is intentional
-  * tests must not depend on execution order or shared mutable state
-* balancing
-  * use recorded test duration, not the number of test methods
-    * example: one test takes 60 seconds, while ten tests take 1 second each
-    * assigning the same number of tests to each shard does not balance this workload
-  * the slowest shard determines when the test stage finishes
-* latency and cost
-
-  ```text
-  unsharded wall time: setup + sum(test durations)
-  sharded wall time:   max(shard setup + shard test durations) + aggregation
-  total compute:       sum(all shard setup + shard test durations)
-  ```
-
-  * this project takes at least 240 seconds plus setup when run without sharding
-  * with four available runners, the test portion of the critical path is approximately 60 seconds
-  * sharding repeats runner, JVM, application-context, and infrastructure setup
-  * sharding is useful only when the saved test time exceeds this repeated overhead
-* difference from JUnit parallel execution
-  * matrix sharding uses separate jobs, runner machines, and JVMs
+    * the slowest shard determines when the test stage finishes
+    * balance shards by total test duration, not test count
+      * example
+        * shard A: one 60-second test = 60 seconds
+        * shard B: ten 1-second tests = 10 seconds
+        * shard A finishes last despite containing fewer tests
+    * sharding is useful only when the saved test time exceeds this repeated overhead
+        * sharding repeats runner, JVM, application-context, and infrastructure setup
+        * overview 
+            ```text
+            unsharded wall time: setup + sum(test durations)
+            sharded wall time:   max(shard setup + shard test durations) + aggregation
+            total compute:       sum(all shard setup + shard test durations)
+            ```
+        * example
+            1. project takes at least 240 seconds plus setup when run without sharding
+            1. with four available runners, the test portion of the critical path is approximately 60 seconds
+* vs JUnit parallel execution
+  * sharding uses separate jobs, runner machines, and JVMs
   * JUnit parallel execution uses concurrent threads within one Surefire test JVM
   * JUnit parallel execution can reuse one cached Spring `ApplicationContext`
 

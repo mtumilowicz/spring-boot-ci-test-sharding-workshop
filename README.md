@@ -64,9 +64,11 @@
   * matrix sharding uses separate jobs, runner machines, and JVMs
   * JUnit parallel execution uses concurrent threads within one Surefire test JVM
   * JUnit parallel execution can reuse one cached Spring `ApplicationContext`
-  * to run top-level `@SpringBootTest` classes concurrently while keeping methods within each class sequential, add `src/test/resources/junit-platform.properties`
+  * to run top-level `@SpringBootTest` classes concurrently while keeping methods within each class sequential
 
     ```properties
+    // src/test/resources/junit-platform.properties
+    
     junit.jupiter.execution.parallel.enabled=true
     junit.jupiter.execution.parallel.mode.default=same_thread
     junit.jupiter.execution.parallel.mode.classes.default=concurrent

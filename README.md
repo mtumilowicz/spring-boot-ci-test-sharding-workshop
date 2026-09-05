@@ -114,50 +114,53 @@
 
   * it therefore runs tests with no tags and tests carrying only unrelated tags such as `slow`
   * it also runs `TestShardConsistencyTest`
-* consistency contract
+* shard contract
   * adding a dedicated shard requires a composed annotation and a matching workflow matrix value
     * example: `@CustomerShard` defines `@Tag("customer")`, and the matrix contains `customer`
-  * `TestShardConsistencyTest`
-    * example
-        ```java
-        var request = LauncherDiscoveryRequestBuilder.request()
-                .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
-                .build();
-        var testPlan = LauncherFactory.create().discover(request);
-        ```
-    * uses JUnit Platform discovery to inspect compiled tests
-        * discovery invokes registered JUnit test engines and may load test classes
-        * discovery is not equivalent to reading class files without running test-framework code
-        * with ordinary Spring Boot tests, discovery does not
-          * execute `@SpringBootTest`
-          * create the Spring `ApplicationContext`
-          * run test lifecycle callbacks
-          * start containers managed by the Testcontainers JUnit extension
-        * class loading or a custom extension can still start infrastructure
-    
-          ```java
-          static PostgreSQLContainer<?> postgres =
-                  new PostgreSQLContainer<>("postgres:17").start();
-          ```
-    
-        * avoid starting containers or other infrastructure in static initializers
-        * Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
-          * augmentation analyzes the application and its extensions
-          * augmentation creates metadata and generated code required to run the application
-          * Dev Services start during this phase
-        * in such a Quarkus project, the consistency test may start Dev Services and containers
-          * the check can become slow
-          * the check can require Docker or external resources
-          * the check can fail in a restricted environment
-
   * each test marked `sharded` must have exactly one dedicated shard tag
     * the tag must match `customer`, `order`, or `payment` from the workflow matrix
-  * the test excludes `unsharded` from the comparison because it is the catch-all job
-  * the consistency test fails when
+  * the contract fails when
     * a test has `sharded` but no dedicated shard tag
     * a dedicated shard tag is absent from the workflow matrix
     * a test has more than one dedicated shard tag
     * a dedicated workflow shard has no matching test
+* consistency test
+  * `TestShardConsistencyTest` reads shard values from the workflow matrix
+  * it excludes `unsharded` because that value identifies the catch-all job
+  * it discovers compiled tests and their JUnit tags
+      * example
+          ```java
+          var request = LauncherDiscoveryRequestBuilder.request()
+                  .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
+                  .build();
+          var testPlan = LauncherFactory.create().discover(request);
+          ```
+      * discovery reads test identifiers and tags without executing test methods
+      * discovery invokes registered JUnit test engines and may load test classes
+      * discovery is not equivalent to reading class files without running test-framework code
+      * with ordinary Spring Boot tests, discovery does not
+        * execute `@SpringBootTest`
+        * create the Spring `ApplicationContext`
+        * run test lifecycle callbacks
+        * start containers managed by the Testcontainers JUnit extension
+      * class loading or a custom extension can still start infrastructure
+    
+        ```java
+        static PostgreSQLContainer<?> postgres =
+                new PostgreSQLContainer<>("postgres:17").start();
+        ```
+    
+      * avoid starting containers or other infrastructure in static initializers
+      * Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
+        * augmentation analyzes the application and its extensions
+        * augmentation creates metadata and generated code required to run the application
+        * Dev Services start during this phase
+      * in such a Quarkus project, the consistency test may start Dev Services and containers
+        * the check can become slow
+        * the check can require Docker or external resources
+        * the check can fail in a restricted environment
+
+  * it compares the dedicated workflow values with the discovered dedicated tags
 
 ## CI Maven commands
 

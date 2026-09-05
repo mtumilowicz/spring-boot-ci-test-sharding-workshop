@@ -14,7 +14,6 @@
 * [GitHub Actions artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)
 * [Spring TestContext parallel execution](https://docs.spring.io/spring-framework/reference/6.2/testing/testcontext-framework/parallel-test-execution.html)
 * [Spring TestContext caching](https://docs.spring.io/spring-framework/reference/testing/testcontext-framework/ctx-management/caching.html)
-* [Testcontainers singleton lifecycle](https://java.testcontainers.org/test_framework_integration/manual_lifecycle_control/#singleton-containers)
 * [Quarkus test class-loading changes](https://quarkus.io/blog/test-classloading-rewrite/)
 
 ## Workshop purpose
@@ -118,15 +117,38 @@
 * consistency contract
   * adding a dedicated shard requires a composed annotation and a matching workflow matrix value
     * example: `@CustomerShard` defines `@Tag("customer")`, and the matrix contains `customer`
-  * `TestShardConsistencyTest` uses JUnit Platform discovery to inspect compiled tests
-    * inspection reads test identifiers and tags without executing test methods
-
-    ```java
-    var request = LauncherDiscoveryRequestBuilder.request()
-            .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
-            .build();
-    var testPlan = LauncherFactory.create().discover(request);
-    ```
+  * `TestShardConsistencyTest`
+    * example
+        ```java
+        var request = LauncherDiscoveryRequestBuilder.request()
+                .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
+                .build();
+        var testPlan = LauncherFactory.create().discover(request);
+        ```
+    * uses JUnit Platform discovery to inspect compiled tests
+        * discovery invokes registered JUnit test engines and may load test classes
+        * discovery is not equivalent to reading class files without running test-framework code
+        * with ordinary Spring Boot tests, discovery does not
+          * execute `@SpringBootTest`
+          * create the Spring `ApplicationContext`
+          * run test lifecycle callbacks
+          * start containers managed by the Testcontainers JUnit extension
+        * class loading or a custom extension can still start infrastructure
+    
+          ```java
+          static PostgreSQLContainer<?> postgres =
+                  new PostgreSQLContainer<>("postgres:17").start();
+          ```
+    
+        * avoid starting containers or other infrastructure in static initializers
+        * Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
+          * augmentation analyzes the application and its extensions
+          * augmentation creates metadata and generated code required to run the application
+          * Dev Services start during this phase
+        * in such a Quarkus project, the consistency test may start Dev Services and containers
+          * the check can become slow
+          * the check can require Docker or external resources
+          * the check can fail in a restricted environment
 
   * each test marked `sharded` must have exactly one dedicated shard tag
     * the tag must match `customer`, `order`, or `payment` from the workflow matrix
@@ -210,88 +232,174 @@
 Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.yml)
 
 * workflow file
+    * example
+      ```yaml
+      name: Test shards # workflow name in GitHub
+    
+      on: # events that start the workflow
+        push: # every push
+        pull_request: # every pull request
+        workflow_dispatch: # manual start
+    
+      permissions: # default GITHUB_TOKEN permissions
+        contents: read # read repository content
+
+      jobs: # workflow jobs
+        example: # job identifier
+          runs-on: ubuntu-latest # runner
+          steps: # sequential job steps
+            - name: Print message # step name
+              run: echo "Workflow started" # shell command
+      ```
+
   * GitHub loads YAML workflow files from `.github/workflows/`
   * `name` identifies the workflow in the GitHub UI
   * `on` selects events such as `push`, `pull_request`, and manual `workflow_dispatch`
   * `permissions` restricts the default `GITHUB_TOKEN`
-  * grant only the access required by the jobs
+    * grant only the access required by the jobs
 * jobs and steps
   * `jobs` contains independent units of work
   * `runs-on` selects the runner machine for a job
   * jobs without dependencies can run concurrently when runners are available
     * parallel start depends on runner availability
-  * `steps` run sequentially inside one job and share its checked-out workspace
+  * a job contains an ordered list of `steps`
+  * steps run from top to bottom
+  * a step starts after the previous step finishes
+  * all steps in one job use the same runner and workspace
   * `uses` invokes a reusable action
-    * `actions/checkout` copies the repository onto the runner
-    * `actions/setup-java` selects the JDK and can cache Maven dependencies
+    * `actions/checkout`
+      * checks out repository files into the runner workspace
+      * supports a partial checkout with `sparse-checkout`
+
+        ```yaml
+        - uses: actions/checkout@v4
+          with:
+            sparse-checkout: |
+              .github
+              .mvn
+              src
+        ```
+
+      * cone mode also includes root files such as `mvnw` and `pom.xml`
+      * a partial checkout provides little benefit in this project
+        * Maven needs `.mvn`, `mvnw`, `pom.xml`, and `src`
+        * `TestShardConsistencyTest` also needs `.github/workflows/test-shards.yml`
+    * `actions/setup-java`
+      * selects Temurin Java 21 for the job
+
+        ```yaml
+        - uses: actions/setup-java@v4
+          with:
+            distribution: temurin
+            java-version: "21"
+            cache: maven
+        ```
+
+      * Maven requires Java to start
+      * Maven also uses Java to compile the application and run the tests
+      * the action makes Java 21 available to later steps through `JAVA_HOME` and `PATH`
+      * `cache: maven` caches downloaded Maven dependencies for later workflow runs
   * `run` executes a shell command such as `./mvnw --batch-mode test`
 * matrices and expressions
-  * `strategy.matrix` expands one job definition into one job per value or value combination
-  * `${{ matrix.shard }}` reads the current matrix value
-  * `env` passes a value to a shell command without duplicating the command
-  * `if` conditionally executes a job or step
+
+  ```yaml
+  jobs:
+    build:
+      strategy:
+        matrix:
+          # Two operating systems and two Java versions create four jobs.
+          os: [ubuntu-latest, windows-latest]
+          java: [17, 21]
+
+      # Use the operating system for the current job.
+      runs-on: ${{ matrix.os }}
+
+      steps:
+        # Run this step only in the Ubuntu jobs.
+        - name: Print Java version
+          if: matrix.os == 'ubuntu-latest'
+
+          # Expose the current Java version as a shell variable.
+          env:
+            JAVA_VERSION: ${{ matrix.java }}
+          run: echo "Java $JAVA_VERSION"
+  ```
+
   * `fail-fast: false` prevents one failed matrix job from cancelling its siblings; it does not hide the failure
-* dependencies and reports
-  * `needs` delays a job until its prerequisite jobs finish
+* job dependencies
+  * jobs are independent by default
+  * their order in the YAML file does not control execution order
+  * `needs` creates a dependency between jobs
+  * `needs: build` makes a job wait for the `build` job
+  * if `build` uses a matrix, the dependent job waits for all matrix runs
+  * `needs.build.result` reads the result of `build`
   * a dependent job is normally skipped when a prerequisite fails
-  * `if: always()` makes the report steps run after success, failure, or cancellation
-  * upload and download artifact actions transfer Surefire reports between isolated runners
-* current report handling
-  * every shard attempts to upload `target/surefire-reports/` with `if: always()`
-  * the upload step fails when the directory contains no reports
-  * the aggregate job uses `needs: shards` and `if: always()` to wait for all shard jobs, including failed jobs
-  * it downloads and merges the report artifacts
-  * `dorny/test-reporter` publishes one combined JUnit check
-  * the final step fails when any shard failed, preserving the original workflow result
 
-## Spring and Testcontainers implications
+  ```yaml
+  jobs:
+    build:
+      runs-on: ubuntu-latest
+      steps:
+        - run: ./build.sh
 
-* Spring context caching
-  * the Spring TestContext cache is static and JVM-local
-  * equivalent test classes can reuse one cached context in an unsharded Surefire JVM
-  * separate matrix jobs cannot share that cache
-  * each current shard therefore loads its own Spring `ApplicationContext`
-* Testcontainers
-  * a static singleton container is singleton per JVM, not per GitHub workflow
-  * if every greeting test used a PostgreSQL Testcontainer, the workflow would start at least four containers
+    report:
+      needs: build # evaluated after build
+      runs-on: ubuntu-latest
+      steps:
+        - run: ./report.sh
+  ```
+
+  * `report` waits for `build`
+  * YAML order alone does not create this dependency
+* status conditions
+  * `success()` runs after success and is the default
+  * `failure()` runs after a failure
+  * `cancelled()` runs after cancellation
+  * `always()` runs after success, failure, or cancellation
+  * `!cancelled()` runs after success or failure, but not cancellation
+
+  ```yaml
+  steps: # run from top to bottom
+    - name: Build
+      run: ./build.sh
+    - name: Cleanup # evaluated after Build
+      if: always() # ignore results of all earlier steps
+      run: ./cleanup.sh
+  ```
+
+* artifacts between jobs
+  * each job has a separate runner and filesystem
+  * files created by one job are not available to another job
+  * an artifact is a named collection of files stored by GitHub
+  * a job can upload reports, logs, binaries, or other files
+  * another job can download the artifact
 
     ```text
-    customer runner -> PostgreSQL container A
-    order runner    -> PostgreSQL container B
-    payment runner  -> PostgreSQL container C
-    unsharded runner -> PostgreSQL container D
+    producer job -> upload -> GitHub artifact storage -> download -> consumer job
     ```
 
-  * an external database avoids container startup but requires isolated databases or schemas for concurrent shards
-* nested JUnit discovery
-  * `TestShardConsistencyTest` calls `Launcher.discover()` to inspect every compiled test
-  * discovery invokes registered JUnit test engines and may load test classes
-  * discovery is not equivalent to reading class files without running test-framework code
-  * with ordinary Spring Boot tests, discovery does not execute `@SpringBootTest`
-  * discovery does not create the application context or run lifecycle callbacks
-  * discovery does not start containers managed by the Testcontainers JUnit extension
-  * discovery can still trigger infrastructure when class loading or a custom extension has side effects
+  ```yaml
+  - uses: actions/upload-artifact@v4 # upload files to GitHub artifact storage
+    with:
+      name: build-output # artifact name
+      path: build/ # directory from the current runner
+  ```
 
-    ```java
-    static PostgreSQLContainer<?> postgres =
-            new PostgreSQLContainer<>("postgres:17").start();
+  * this example stores `build/` as the artifact named `build-output`
+* current workflow aggregation
+  * `download-artifact` selects artifacts matching `surefire-reports-*`
+
+    ```yaml
+    - uses: actions/download-artifact@v4 # download stored artifacts
+      with:
+        pattern: surefire-reports-* # select artifact names
+        path: combined-reports # destination on the current runner
+        merge-multiple: true # extract all matches into one directory
     ```
 
-  * avoid starting containers or other infrastructure in static initializers
-  * this design is unsuitable for Quarkus 3.22 and later when discovery includes `@QuarkusTest` classes that use Dev Services
-    * Quarkus performs augmentation during JUnit discovery
-    * augmentation analyzes the application and its extensions
-    * augmentation creates the metadata and generated code required to run the application
-    * Dev Services start during this phase
-  * in such a project, `TestShardConsistencyTest` may start Dev Services and containers
-  * the consistency check can therefore become slow or require Docker and external resources
-  * the consistency check may fail in a restricted environment
-
-## Production guidance
-
-* keep an unsharded catch-all job
-  * the current workflow excludes `sharded`, so every test without the marker enters the unsharded job
-  * the consistency test rejects missing and ambiguous dedicated shard tags
-* keep report paths unique because `merge-multiple: true` can overwrite equal filenames
-* rebalance shards from Surefire XML durations when one shard becomes the critical path
-* reduce the shard count when repeated context or container startup consumes the latency gain
+  * `merge-multiple: true` extracts all selected artifacts into `combined-reports`
+  * it does not combine the XML content
+  * equal relative filenames can overwrite each other
+  * report filenames must therefore be unique across shards
+  * `dorny/test-reporter` reads the remaining `TEST-*.xml` files and creates one GitHub check
+  * the final step fails when any shard failed, preserving the original workflow result

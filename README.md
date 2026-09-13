@@ -65,53 +65,22 @@
   * JUnit parallel execution uses concurrent threads within one Surefire test JVM
   * JUnit parallel execution can reuse one cached Spring `ApplicationContext`
 
-## JUnit tag strategy
+## tag-based sharding
 
-* sharded test
+* JUnit tag
+  * a text label added with `@Tag`
+  * can label a test class or test method
+  * the label has no effect until a test command uses it
+  * Maven Surefire can select tests by tag
 
-    ```yaml
-    - name: Run ${{ matrix.shard }} tests
-      if: matrix.shard != 'unsharded'
-      env:
-        SHARD: ${{ matrix.shard }}
-      run: ./mvnw --batch-mode test "-Dgroups=sharded & $SHARD"
+    ```shell
+    ./mvnw -Dgroups=customer test
     ```
 
-   * definition
- 
-     ```java
-     @Target({ElementType.TYPE, ElementType.METHOD})
-     @Retention(RetentionPolicy.RUNTIME)
-     @Tag("sharded")
-     @Tag("customer")
-     public @interface CustomerShard {
-     }
-     ```
-  * purpose
-    * apply the `sharded` marker and one dedicated shard name together
-    * remove the need to apply two separate annotations
-  * usage
-
-    ```java
-    @CustomerShard
-    class CustomerGreetingTest {
-    }
-    ```
-
-  * `@OrderShard` and `@PaymentShard` follow the same pattern
-  * `sharded` identifies tests assigned to dedicated jobs
-  * `customer`, `order`, or `payment` selects the dedicated job
-* unsharded tests
-  * the unsharded job excludes `sharded`
-
-    ```yaml
-    - name: Run unsharded tests
-      if: matrix.shard == 'unsharded'
-      run: ./mvnw --batch-mode test -DexcludedGroups=sharded
-    ```
-
-  * it therefore runs tests with no tags and tests carrying only unrelated tags such as `slow`
-  * it also runs `TestShardConsistencyTest`
+  * this command runs tests tagged `customer`
+* overview
+  * assign each dedicated test a shard tag
+  * run one CI job for each shard tag
 * shard contract
   * adding a dedicated shard requires a composed annotation and a matching workflow matrix value
     * example: `@CustomerShard` defines `@Tag("customer")`, and the matrix contains `customer`
@@ -302,6 +271,15 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
       * `cache: maven` caches downloaded Maven dependencies for later workflow runs
   * `run` executes a shell command such as `./mvnw --batch-mode test`
 * matrices and expressions
+  * everything under `jobs.shards` defines one job template
+  * the matrix creates four copies of that job
+  * for each copy
+    * `name` and `runs-on` are evaluated
+    * a separate runner starts
+    * each step is evaluated
+    * a step runs if it has no `if`
+    * a step is skipped if its `if` condition is false
+  * `strategy` configures the copies; it is not an executed step
 
   ```yaml
   jobs:

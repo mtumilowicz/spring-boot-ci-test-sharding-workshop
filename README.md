@@ -123,29 +123,39 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
     * belong to one job
       * all steps in one job use the same runner and workspace
     * use the same runner and filesystem
-    * are evaluated from top to bottom
-    * a step starts after the previous step finishes
-      * GitHub evaluates the next step's `if`
+    * YAML order defines the step order
+    * before a step runs, GitHub evaluates its `if`
+      * without `if`, the step runs only when earlier steps succeeded
+      * with `if`, the step runs when the expression is true
     * step execution
       * `run` executes a shell command
+        * example
+
+          ```yaml
+          - run: ./mvnw --batch-mode test
+          ```
+
       * `uses` executes an action
+        * `with` passes named inputs to the action
+          * input names depend on the selected action
         * `actions/checkout`
-          * checks out repository files into the runner workspace
-          * supports a partial checkout with `sparse-checkout`
+          * example: checks out the current repository
 
             ```yaml
             - uses: actions/checkout@v4
-              with:
-                sparse-checkout: |
-                  .github
-                  .mvn
-                  src
             ```
 
-          * cone mode also includes root files such as `mvnw` and `pom.xml`
-          * a partial checkout provides little benefit in small projects
+          * purpose: checks out repository files into the runner workspace
+            * supports a partial checkout with `sparse-checkout`
+              * only selected paths are checked out
+              * cone mode
+                * is enabled by default
+                * treats each selected path as a directory
+                * also includes files from the repository root
+                * must be disabled to select individual files or other Git patterns
+              * a partial checkout provides little benefit in small projects
         * `actions/setup-java`
-          * selects Temurin Java 21 for the job
+          * example: selects Temurin Java 21 for the job
 
             ```yaml
             - uses: actions/setup-java@v4
@@ -160,6 +170,7 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
             * the action makes Java 21 available to later steps through `JAVA_HOME` and `PATH`
             * `cache: maven` caches downloaded Maven dependencies for later workflow runs
   * jobs
+    * `runs-on` selects the runner machine for a job
     * contains an ordered list of `steps`
     * are independent by default
       * two independent jobs can run concurrently when runners are available
@@ -169,64 +180,69 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
           * use separate runners
           * wait for multiple earlier jobs
       * dependent jobs
-        * `needs` creates an order between jobs
-          * the dependent job is evaluated after the required jobs finish
-          * `needs.<job-id>.result` contains the result of a required job
-            * possible values are `success`, `failure`, `cancelled`, and `skipped`
-            * a dependent job can use the result to report or preserve a failure
-          * `needs` does not transfer files between jobs
-        * artifacts between dependent jobs
-          * each job has a separate filesystem
-          * files created by one job are not available to another job
-          * `upload-artifact` stores selected files in GitHub artifact storage
-          * `download-artifact` copies stored files into another job
-          * artifacts can contain reports, logs, binaries, or other files
+        * `needs` makes a job wait until the required jobs finish
+        * before the dependent job starts, GitHub evaluates its `if`
+          * without `if`, the job starts only when all required jobs succeeded
+          * with `if`, the job starts when the expression is true
+        * transferring data
+          * `needs` does not transfer data
+            * `needs.<job-id>.result` contains the result of a required job
+              * possible values are `success`, `failure`, `cancelled`, and `skipped`
+              * a dependent job can use the result to report or preserve a failure
+          * artifacts transfer files between jobs
+            * an artifact is a named collection of files stored by GitHub
+                * can contain reports, logs, binaries, or other files
+            * GitHub artifact storage is outside job runners
+                * artifacts are temporary
+                  * retention is the number of days before automatic deletion
+                  * default retention is 90 days unless repository, organization, or enterprise settings change it
+                  * `retention-days` sets retention for one artifact
+                  * the value cannot exceed the configured retention limit
+                  * deleting a workflow run also deletes its artifacts
+            * each job has a separate filesystem
+            * files created by one job are not available to another job
+                * `upload-artifact` stores an artifact
+                * `download-artifact` copies an artifact into another job
 
-          ```text
-          producer job -> upload -> GitHub artifact storage -> download -> consumer job
-          ```
+            * example
+              ```text
+              producer job -> upload -> GitHub artifact storage -> download -> consumer job
+              ```
 
-          * example
+              ```yaml
+              jobs:
+                build:
+                  steps:
+                    - run: ./mvnw package
 
-            ```yaml
-            jobs:
-              build:
-                steps:
-                  - run: ./mvnw package
+                    - uses: actions/upload-artifact@v4
+                      with:
+                        name: application-jar
+                        path: target/*.jar
+                        retention-days: 7
 
-                  - uses: actions/upload-artifact@v4
-                    with:
-                      name: application-jar
-                      path: target/*.jar
+                package-image:
+                  needs: build
+                  steps:
+                    - uses: actions/download-artifact@v4
+                      with:
+                        name: application-jar
+                        path: target/
 
-              package-image:
-                needs: build
-                steps:
-                  - uses: actions/download-artifact@v4
-                    with:
-                      name: application-jar
-                      path: target/
+                    - run: docker build --tag application:ci .
+              ```
 
-                  - run: docker build --tag application:ci .
-            ```
-
-          * the artifact transfers the JAR because `package-image` uses a different runner and filesystem
-          * downloading multiple artifacts
-            * `merge-multiple: true` extracts all matching artifacts into one directory
-            * it does not combine file contents
-            * equal relative filenames can overwrite each other
-            * filenames must be unique when artifacts are merged
-    * `runs-on` selects the runner machine for a job
-  * `if` can control a step or a job
+            * downloading multiple artifacts
+              * `merge-multiple: true` extracts all matching artifacts into one directory
+              * it does not combine file contents
+              * equal relative filenames can overwrite each other
+              * filenames must be unique when artifacts are merged
+  * status conditions
     * `success()` is true after success and is the default
     * `failure()` is true after failure
     * `cancelled()` is true after cancellation
     * `always()` is true after success, failure, or cancellation
     * `!cancelled()` is true after success or failure
-    * on a step
-      * the condition is evaluated after earlier steps in the same job
-    * on a job with `needs`
-      * the condition is evaluated after the required jobs finish
 * matrices and expressions
   * everything under `jobs.<job-id>` defines one job template
     * the job template uses `${{ matrix.<name> }}` as a placeholder for a value

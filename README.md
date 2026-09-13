@@ -54,33 +54,38 @@
   * JUnit parallel execution uses concurrent threads within one Surefire test JVM
   * JUnit parallel execution can reuse one cached Spring `ApplicationContext`
 
-## CI Maven commands
+## Maven in CI
 
-* command prefix
-  * `./mvnw`
-    * uses the Maven version defined by the project wrapper
-    * keeps developer and CI builds on the same Maven version
-  * `--batch-mode`
-    * runs Maven without requesting user input
-    * prevents a CI job from waiting for input that nobody can provide
-  * `--no-transfer-progress`
-    * hides repeated progress updates while Maven transfers dependencies
-    * keeps CI logs concise while preserving errors
-  * `--show-version`
-    * writes the Maven and Java versions to the log
-    * helps diagnose differences between developer and CI environments
-  * `--errors`
-    * writes Maven exception stack traces to the CI log
-    * used for dependency-resolution, plugin, or Maven execution failures
-        * ordinary test assertion failures are already available in the Surefire reports
-* test-selection properties
+* Maven command
+  * wrapper
+    * `./mvnw`
+      * uses the Maven version defined by the project wrapper
+      * keeps developer and CI builds on the same Maven version
+  * CI options
+    * `--batch-mode`
+      * runs Maven without requesting user input
+      * prevents a CI job from waiting for input that nobody can provide
+    * `--no-transfer-progress`
+      * hides repeated progress updates while Maven transfers dependencies
+      * keeps CI logs concise while preserving errors
+    * `--show-version`
+      * writes the Maven and Java versions to the log
+      * helps diagnose differences between developer and CI environments
+  * diagnostic option
+    * `--errors`
+      * writes Maven exception stack traces to the CI log
+      * used for dependency-resolution, plugin, or Maven execution failures
+          * ordinary test assertion failures are already available in the Surefire reports
+* Surefire options
+  * `-D` passes a property to Maven
+  * Surefire reads these properties
   * example: `./mvnw --batch-mode test "-Dgroups=sharded & customer"`
-  * `groups`
+  * `-Dgroups=...`
     * selects tests whose JUnit tags match an expression
     * example: `sharded & customer` selects tests carrying both tags
-  * `excludedGroups`
+  * `-DexcludedGroups=...`
     * excludes tests whose JUnit tags match an expression
-  * `failIfNoTests`
+  * `-DfailIfNoTests=true`
     * fails the Maven command when the test selection is empty
 
 ## GitHub Actions workflow
@@ -157,40 +162,48 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
       * `cache: maven` caches downloaded Maven dependencies for later workflow runs
   * `run` executes a shell command such as `./mvnw --batch-mode test`
 * matrices and expressions
-  * everything under `jobs.shards` defines one job template
-  * the matrix creates four copies of that job
-  * for each copy
-    * `name` and `runs-on` are evaluated
-    * a separate runner starts
-    * each step is evaluated
-    * a step runs if it has no `if`
-    * a step is skipped if its `if` condition is false
-  * `strategy` configures the copies; it is not an executed step
+  * everything under `jobs.<job-id>` defines one job template
+    * the job template uses `${{ matrix.<name> }}` as a placeholder for a value
+    * `strategy.matrix` provides the possible values for each placeholder
+    * GitHub creates one copy of the template for each value combination
+        * in each copy, GitHub replaces the placeholders with that copy's values
+        * for each copy
+          * `name` and `runs-on` are evaluated
+          * a separate runner starts
+          * each step is evaluated
+          * a step runs if it has no `if`
+          * a step is skipped if its `if` condition is false
+    * example
+      ```yaml
+      jobs:
+        example:
+          name: Job for ${{ matrix.value }}
+    
+          strategy:
+            fail-fast: false # do not cancel other copies after one fails
+            matrix:
+              value: [first, second]
+    
+          runs-on: ubuntu-latest
+    
+          steps:
+            - name: Print current value
+              env:
+                VALUE: ${{ matrix.value }}
+              run: echo "$VALUE"
+    
+            - name: Run only for first
+              if: matrix.value == 'first'
+              run: echo "First"
+      ```
 
-  ```yaml
-  jobs:
-    build:
-      strategy:
-        matrix:
-          # Two operating systems and two Java versions create four jobs.
-          os: [ubuntu-latest, windows-latest]
-          java: [17, 21]
-
-      # Use the operating system for the current job.
-      runs-on: ${{ matrix.os }}
-
-      steps:
-        # Run this step only in the Ubuntu jobs.
-        - name: Print Java version
-          if: matrix.os == 'ubuntu-latest'
-
-          # Expose the current Java version as a shell variable.
-          env:
-            JAVA_VERSION: ${{ matrix.java }}
-          run: echo "Java $JAVA_VERSION"
-  ```
-
-  * `fail-fast: false` prevents one failed matrix job from cancelling its siblings; it does not hide the failure
+      * GitHub creates two copies of the `example` job template
+        * the first copy replaces `${{ matrix.value }}` with `first`
+        * the second copy replaces `${{ matrix.value }}` with `second`
+      * the `Print current value` step runs in both copies
+      * the `Run only for first` step runs only in the first copy
+      * `fail-fast: false` keeps other matrix job copies running when one copy fails
+      * it does not convert a failure to success
 * job dependencies
   * jobs are independent by default
   * their order in the YAML file does not control execution order

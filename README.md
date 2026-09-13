@@ -119,14 +119,101 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
   * `permissions` restricts the default `GITHUB_TOKEN`
     * grant only the access required by the jobs
 * jobs and steps
-  * `jobs` contains independent units of work
-  * `runs-on` selects the runner machine for a job
-  * jobs without dependencies can run concurrently when runners are available
-    * parallel start depends on runner availability
-  * a job contains an ordered list of `steps`
-  * steps run from top to bottom
-  * a step starts after the previous step finishes
-  * all steps in one job use the same runner and workspace
+  * steps
+    * belong to one job
+        * all steps in one job use the same runner and workspace
+    * use the same runner and filesystem
+    * are evaluated from top to bottom
+    * a step starts after the previous step finishes
+        * GitHub evaluates the next step's `if`
+  * jobs
+    * contains an ordered list of `steps`
+    * are independent by default
+        * can run concurrently when runners are available (if not have dependencies on each other)
+            * use separate jobs when work must
+              * run concurrently
+              * use separate runners
+              * wait for multiple earlier jobs
+        * dependent jobs
+            * `needs` creates an order between jobs
+              * the dependent job is evaluated after the required jobs finish
+              * `needs` does not transfer files between jobs
+            * artifacts between dependent jobs
+              * each job has a separate filesystem
+              * files created by one job are not available to another job
+              * `upload-artifact` stores selected files in GitHub artifact storage
+              * `download-artifact` copies stored files into another job
+              * artifacts can contain reports, logs, binaries, or other files
+          
+            ```text
+            producer job -> upload -> GitHub artifact storage -> download -> consumer job
+            ```
+          
+            * example
+          
+              ```yaml
+              jobs:
+                tests:
+                  strategy:
+                    matrix:
+                      suite: [unit, integration]
+          
+                  runs-on: ubuntu-latest
+          
+                  steps:
+                    - name: Run tests
+                      env:
+                        SUITE: ${{ matrix.suite }}
+                      run: ./test.sh "$SUITE"
+          
+                    - name: Upload results
+                      if: always() # run after successful or failed tests
+                      uses: actions/upload-artifact@v4
+                      with:
+                        name: test-results-${{ matrix.suite }}
+                        path: test-results/
+          
+                report:
+                  needs: tests # wait for all test jobs
+                  if: always() # start even when a test job fails
+                  runs-on: ubuntu-latest
+          
+                  steps:
+                    - name: Download results
+                      uses: actions/download-artifact@v4
+                      with:
+                        pattern: test-results-*
+                        path: combined-results
+                        merge-multiple: true
+          
+                    - name: Create report
+                      run: ./create-report.sh combined-results
+          
+                    - name: Preserve test result
+                      if: needs.tests.result != 'success'
+                      run: exit 1
+              ```
+          
+            * `merge-multiple: true` extracts all matching artifacts into one directory
+            * it does not combine file contents
+            * equal relative filenames can overwrite each other
+            * filenames must be unique when artifacts are merged
+    * are not ordered by their position in the YAML file
+    * `runs-on` selects the runner machine for a job
+  * status conditions
+        * `if` can control a step or a job
+        * `success()` is true after success and is the default
+        * `failure()` is true after failure
+        * `cancelled()` is true after cancellation
+        * `always()` is true after success, failure, or cancellation
+        * `!cancelled()` is true after success or failure
+        * on a step
+          * the condition is evaluated after earlier steps in the same job
+        * on a job with `needs`
+          * the condition is evaluated after the required jobs finish
+        * `needs.<job-id>.result` contains the result of a required job
+          * possible values are `success`, `failure`, `cancelled`, and `skipped`
+          * a dependent job can use the result to report or preserve a failure
   * `uses` invokes a reusable action
     * `actions/checkout`
       * checks out repository files into the runner workspace
@@ -204,83 +291,6 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
       * the `Run only for first` step runs only in the first copy
       * `fail-fast: false` keeps other matrix job copies running when one copy fails
       * it does not convert a failure to success
-* job dependencies
-  * jobs are independent by default
-  * their order in the YAML file does not control execution order
-  * `needs` creates a dependency between jobs
-  * `needs: build` makes a job wait for the `build` job
-  * if `build` uses a matrix, the dependent job waits for all matrix runs
-  * `needs.build.result` reads the result of `build`
-  * a dependent job is normally skipped when a prerequisite fails
-
-  ```yaml
-  jobs:
-    build:
-      runs-on: ubuntu-latest
-      steps:
-        - run: ./build.sh
-
-    report:
-      needs: build # evaluated after build
-      runs-on: ubuntu-latest
-      steps:
-        - run: ./report.sh
-  ```
-
-  * `report` waits for `build`
-  * YAML order alone does not create this dependency
-* status conditions
-  * `success()` runs after success and is the default
-  * `failure()` runs after a failure
-  * `cancelled()` runs after cancellation
-  * `always()` runs after success, failure, or cancellation
-  * `!cancelled()` runs after success or failure, but not cancellation
-
-  ```yaml
-  steps: # run from top to bottom
-    - name: Build
-      run: ./build.sh
-    - name: Cleanup # evaluated after Build
-      if: always() # ignore results of all earlier steps
-      run: ./cleanup.sh
-  ```
-
-* artifacts between jobs
-  * each job has a separate runner and filesystem
-  * files created by one job are not available to another job
-  * an artifact is a named collection of files stored by GitHub
-  * a job can upload reports, logs, binaries, or other files
-  * another job can download the artifact
-
-    ```text
-    producer job -> upload -> GitHub artifact storage -> download -> consumer job
-    ```
-
-  ```yaml
-  - uses: actions/upload-artifact@v4 # upload files to GitHub artifact storage
-    with:
-      name: build-output # artifact name
-      path: build/ # directory from the current runner
-  ```
-
-  * this example stores `build/` as the artifact named `build-output`
-* current workflow aggregation
-  * `download-artifact` selects artifacts matching `surefire-reports-*`
-
-    ```yaml
-    - uses: actions/download-artifact@v4 # download stored artifacts
-      with:
-        pattern: surefire-reports-* # select artifact names
-        path: combined-reports # destination on the current runner
-        merge-multiple: true # extract all matches into one directory
-    ```
-
-  * `merge-multiple: true` extracts all selected artifacts into `combined-reports`
-  * it does not combine the XML content
-  * equal relative filenames can overwrite each other
-  * report filenames must therefore be unique across shards
-  * `dorny/test-reporter` reads the remaining `TEST-*.xml` files and creates one GitHub check
-  * the final step fails when any shard failed, preserving the original workflow result
 
 ## tag-based sharding
 

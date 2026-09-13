@@ -343,57 +343,53 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
   * each sharded test must have exactly one shard name
 * consistency check
   * an automated test can detect differences between test tags and the CI matrix
-    * example
-      1. reads shard names from the workflow
-      1. reads tags from tests
-        * discovery behavior
-            * example
-                ```java
-                // search request in selected directories for compiled test classes
-                var request = LauncherDiscoveryRequestBuilder.request()
-                        .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
-                        .build();
-                
-                // contains the discovered tests, identifiers, and tags
-                var testPlan = LauncherFactory.create().discover(request);
-              
-                var tags = testPlan.getRoots().stream()
-                        // get all test classes and methods below each test-engine root
-                        // plan roots are the top-level test-engine nodes, ex.: JUnit Jupiter
-                        .flatMap(root -> testPlan.getDescendants(root).stream())
-                        // get the tags attached to each test
-                        .flatMap(test -> test.getTags().stream())
-                        // get each tag name
-                        .map(TestTag::getName)
-                        // remove duplicate tag names
-                        .collect(Collectors.toSet());
-                ```
-            * JUnit Platform asks each test engine to build a list of tests
-              * the test engine may load a test class to inspect its annotations and methods
-              * loading the class does not run its test methods
-                * the test engine may also initialize the class
-                    * a static initializer can start infrastructure
-                        * do not start infrastructure in static initializers
-                        * example
-                            ```
-                                      static PostgreSQLContainer<?> postgres =
-                                              new PostgreSQLContainer<>("postgres:17").start();
-                            ```
-            * * discovery runs test-engine code; it does not only read `.class` files
-                      * Spring Boot normally does not create the application context
-                      * Quarkus can perform augmentation and start Dev Services
-                      * discovery is not equivalent to reading class files without running test-framework code
-                      * with ordinary Spring Boot tests, discovery does not
-                        * execute `@SpringBootTest`
-                        * create the Spring `ApplicationContext`
-                        * run test lifecycle callbacks
-                        * start containers managed by the Testcontainers JUnit extension
-                      * Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
-                        * augmentation analyzes the application and its extensions
-                        * augmentation creates metadata and generated code required to run the application
-                        * Dev Services start during this phase
-                      * in such a Quarkus project, the consistency test may start Dev Services and containers
-                        * the check can become slow
-                        * the check can require Docker or external resources
-                        * the check can fail in a restricted environment        
-      1. compares the two sets of shard names
+  * example
+    1. reads shard names from the workflow
+    1. reads tags from tests
+       * discovery behavior
+         * example
+
+           ```java
+           // search request in selected directories for compiled test classes
+           var request = LauncherDiscoveryRequestBuilder.request()
+                   .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
+                   .build();
+
+           // contains the discovered tests, identifiers, and tags
+           var testPlan = LauncherFactory.create().discover(request);
+
+           var tags = testPlan.getRoots().stream()
+                   // get all test classes and methods below each test-engine root
+                   // plan roots are the top-level test-engine nodes, ex.: JUnit Jupiter
+                   .flatMap(root -> testPlan.getDescendants(root).stream())
+                   // get the tags attached to each test
+                   .flatMap(test -> test.getTags().stream())
+                   // get each tag name
+                   .map(TestTag::getName)
+                   // remove duplicate tag names
+                   .collect(Collectors.toSet());
+           ```
+
+         * JUnit Platform asks each test engine to build a list of tests
+           * the test engine may load a test class to inspect its annotations and methods
+            * loading the class does not run its test methods but triggers initialization
+             * a static initializer can start infrastructure
+                * example
+    
+                  ```
+                  static PostgreSQLContainer<?> postgres =
+                          new PostgreSQLContainer<>("postgres:17").start();
+                  ```
+
+         * discovery runs test-engine code
+            * in particular: it does not only read `.class` files
+            * example: Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
+                * augmentation analyzes the application and its extensions
+                * augmentation creates metadata and generated code required to run the application
+                * Dev Services start during this phase
+            * with ordinary Spring Boot tests, discovery does not
+                * execute `@SpringBootTest`
+                * create the Spring `ApplicationContext`
+                * run test lifecycle callbacks
+                * start containers managed by the Testcontainers JUnit extension
+    1. compares the two sets of shard names

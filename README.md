@@ -121,133 +121,112 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
 * jobs and steps
   * steps
     * belong to one job
-        * all steps in one job use the same runner and workspace
+      * all steps in one job use the same runner and workspace
     * use the same runner and filesystem
     * are evaluated from top to bottom
     * a step starts after the previous step finishes
-        * GitHub evaluates the next step's `if`
+      * GitHub evaluates the next step's `if`
+    * step execution
+      * `run` executes a shell command
+      * `uses` executes an action
+        * `actions/checkout`
+          * checks out repository files into the runner workspace
+          * supports a partial checkout with `sparse-checkout`
+
+            ```yaml
+            - uses: actions/checkout@v4
+              with:
+                sparse-checkout: |
+                  .github
+                  .mvn
+                  src
+            ```
+
+          * cone mode also includes root files such as `mvnw` and `pom.xml`
+          * a partial checkout provides little benefit in small projects
+        * `actions/setup-java`
+          * selects Temurin Java 21 for the job
+
+            ```yaml
+            - uses: actions/setup-java@v4
+              with:
+                distribution: temurin
+                java-version: "21"
+                cache: maven
+            ```
+          * purpose
+            * Maven requires Java to start
+            * Maven also uses Java to compile the application and run the tests
+            * the action makes Java 21 available to later steps through `JAVA_HOME` and `PATH`
+            * `cache: maven` caches downloaded Maven dependencies for later workflow runs
   * jobs
     * contains an ordered list of `steps`
     * are independent by default
-        * can run concurrently when runners are available (if not have dependencies on each other)
-            * use separate jobs when work must
-              * run concurrently
-              * use separate runners
-              * wait for multiple earlier jobs
-        * dependent jobs
-            * `needs` creates an order between jobs
-              * the dependent job is evaluated after the required jobs finish
-              * `needs` does not transfer files between jobs
-            * artifacts between dependent jobs
-              * each job has a separate filesystem
-              * files created by one job are not available to another job
-              * `upload-artifact` stores selected files in GitHub artifact storage
-              * `download-artifact` copies stored files into another job
-              * artifacts can contain reports, logs, binaries, or other files
-          
-            ```text
-            producer job -> upload -> GitHub artifact storage -> download -> consumer job
+      * two independent jobs can run concurrently when runners are available
+        * in particular: are not ordered by their position in the YAML file
+        * use separate jobs when work must
+          * run concurrently
+          * use separate runners
+          * wait for multiple earlier jobs
+      * dependent jobs
+        * `needs` creates an order between jobs
+          * the dependent job is evaluated after the required jobs finish
+          * `needs` does not transfer files between jobs
+        * artifacts between dependent jobs
+          * each job has a separate filesystem
+          * files created by one job are not available to another job
+          * `upload-artifact` stores selected files in GitHub artifact storage
+          * `download-artifact` copies stored files into another job
+          * artifacts can contain reports, logs, binaries, or other files
+
+          ```text
+          producer job -> upload -> GitHub artifact storage -> download -> consumer job
+          ```
+
+          * example
+
+            ```yaml
+            jobs:
+              build:
+                steps:
+                  - run: ./mvnw package
+
+                  - uses: actions/upload-artifact@v4
+                    with:
+                      name: application-jar
+                      path: target/*.jar
+
+              package-image:
+                needs: build
+                steps:
+                  - uses: actions/download-artifact@v4
+                    with:
+                      name: application-jar
+                      path: target/
+
+                  - run: docker build --tag application:ci .
             ```
-          
-            * example
-          
-              ```yaml
-              jobs:
-                tests:
-                  strategy:
-                    matrix:
-                      suite: [unit, integration]
-          
-                  runs-on: ubuntu-latest
-          
-                  steps:
-                    - name: Run tests
-                      env:
-                        SUITE: ${{ matrix.suite }}
-                      run: ./test.sh "$SUITE"
-          
-                    - name: Upload results
-                      if: always() # run after successful or failed tests
-                      uses: actions/upload-artifact@v4
-                      with:
-                        name: test-results-${{ matrix.suite }}
-                        path: test-results/
-          
-                report:
-                  needs: tests # wait for all test jobs
-                  if: always() # start even when a test job fails
-                  runs-on: ubuntu-latest
-          
-                  steps:
-                    - name: Download results
-                      uses: actions/download-artifact@v4
-                      with:
-                        pattern: test-results-*
-                        path: combined-results
-                        merge-multiple: true
-          
-                    - name: Create report
-                      run: ./create-report.sh combined-results
-          
-                    - name: Preserve test result
-                      if: needs.tests.result != 'success'
-                      run: exit 1
-              ```
-          
+
+          * the artifact transfers the JAR because `package-image` uses a different runner and filesystem
+          * downloading multiple artifacts
             * `merge-multiple: true` extracts all matching artifacts into one directory
             * it does not combine file contents
             * equal relative filenames can overwrite each other
             * filenames must be unique when artifacts are merged
-    * are not ordered by their position in the YAML file
     * `runs-on` selects the runner machine for a job
-  * status conditions
-        * `if` can control a step or a job
-        * `success()` is true after success and is the default
-        * `failure()` is true after failure
-        * `cancelled()` is true after cancellation
-        * `always()` is true after success, failure, or cancellation
-        * `!cancelled()` is true after success or failure
-        * on a step
-          * the condition is evaluated after earlier steps in the same job
-        * on a job with `needs`
-          * the condition is evaluated after the required jobs finish
-        * `needs.<job-id>.result` contains the result of a required job
-          * possible values are `success`, `failure`, `cancelled`, and `skipped`
-          * a dependent job can use the result to report or preserve a failure
-  * `uses` invokes a reusable action
-    * `actions/checkout`
-      * checks out repository files into the runner workspace
-      * supports a partial checkout with `sparse-checkout`
-
-        ```yaml
-        - uses: actions/checkout@v4
-          with:
-            sparse-checkout: |
-              .github
-              .mvn
-              src
-        ```
-
-      * cone mode also includes root files such as `mvnw` and `pom.xml`
-      * a partial checkout provides little benefit in this project
-        * Maven needs `.mvn`, `mvnw`, `pom.xml`, and `src`
-        * `TestShardConsistencyTest` also needs `.github/workflows/test-shards.yml`
-    * `actions/setup-java`
-      * selects Temurin Java 21 for the job
-
-        ```yaml
-        - uses: actions/setup-java@v4
-          with:
-            distribution: temurin
-            java-version: "21"
-            cache: maven
-        ```
-
-      * Maven requires Java to start
-      * Maven also uses Java to compile the application and run the tests
-      * the action makes Java 21 available to later steps through `JAVA_HOME` and `PATH`
-      * `cache: maven` caches downloaded Maven dependencies for later workflow runs
-  * `run` executes a shell command such as `./mvnw --batch-mode test`
+  * `if` can control a step or a job
+    * `success()` is true after success and is the default
+    * `failure()` is true after failure
+    * `cancelled()` is true after cancellation
+    * `always()` is true after success, failure, or cancellation
+    * `!cancelled()` is true after success or failure
+    * on a step
+      * the condition is evaluated after earlier steps in the same job
+    * on a job with `needs`
+      * the condition is evaluated after the required jobs finish
+    * `needs.<job-id>.result` contains the result of a required job
+      * possible values are `success`, `failure`, `cancelled`, and `skipped`
+      * a dependent job can use the result to report or preserve a failure
 * matrices and expressions
   * everything under `jobs.<job-id>` defines one job template
     * the job template uses `${{ matrix.<name> }}` as a placeholder for a value

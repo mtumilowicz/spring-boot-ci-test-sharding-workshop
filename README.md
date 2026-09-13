@@ -65,70 +65,6 @@
   * JUnit parallel execution uses concurrent threads within one Surefire test JVM
   * JUnit parallel execution can reuse one cached Spring `ApplicationContext`
 
-## tag-based sharding
-
-* JUnit tag
-  * a text label added with `@Tag`
-  * can label a test class or test method
-  * the label has no effect until a test command uses it
-  * Maven Surefire can select tests by tag
-
-    ```shell
-    ./mvnw -Dgroups=customer test
-    ```
-
-  * this command runs tests tagged `customer`
-* overview
-  * assign each dedicated test a shard tag
-  * run one CI job for each shard tag
-* shard contract
-  * adding a dedicated shard requires a composed annotation and a matching workflow matrix value
-    * example: `@CustomerShard` defines `@Tag("customer")`, and the matrix contains `customer`
-  * each test marked `sharded` must have exactly one dedicated shard tag
-    * the tag must match `customer`, `order`, or `payment` from the workflow matrix
-  * the contract fails when
-    * a test has `sharded` but no dedicated shard tag
-    * a dedicated shard tag is absent from the workflow matrix
-    * a test has more than one dedicated shard tag
-    * a dedicated workflow shard has no matching test
-* consistency test
-  * `TestShardConsistencyTest` reads shard values from the workflow matrix
-  * it excludes `unsharded` because that value identifies the catch-all job
-  * it discovers compiled tests and their JUnit tags
-      * example
-          ```java
-          var request = LauncherDiscoveryRequestBuilder.request()
-                  .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
-                  .build();
-          var testPlan = LauncherFactory.create().discover(request);
-          ```
-      * discovery reads test identifiers and tags without executing test methods
-      * discovery invokes registered JUnit test engines and may load test classes
-      * discovery is not equivalent to reading class files without running test-framework code
-      * with ordinary Spring Boot tests, discovery does not
-        * execute `@SpringBootTest`
-        * create the Spring `ApplicationContext`
-        * run test lifecycle callbacks
-        * start containers managed by the Testcontainers JUnit extension
-      * class loading or a custom extension can still start infrastructure
-    
-        ```java
-        static PostgreSQLContainer<?> postgres =
-                new PostgreSQLContainer<>("postgres:17").start();
-        ```
-    
-      * avoid starting containers or other infrastructure in static initializers
-      * Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
-        * augmentation analyzes the application and its extensions
-        * augmentation creates metadata and generated code required to run the application
-        * Dev Services start during this phase
-      * in such a Quarkus project, the consistency test may start Dev Services and containers
-        * the check can become slow
-        * the check can require Docker or external resources
-        * the check can fail in a restricted environment
-
-  * it compares the dedicated workflow values with the discovered dedicated tags
-
 ## CI Maven commands
 
 * command prefix
@@ -382,3 +318,82 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
   * report filenames must therefore be unique across shards
   * `dorny/test-reporter` reads the remaining `TEST-*.xml` files and creates one GitHub check
   * the final step fails when any shard failed, preserving the original workflow result
+
+## tag-based sharding
+
+* overview
+  * assign each dedicated test a shard tag
+  * run one CI job for each shard tag
+* JUnit tag
+  * a text label added with `@Tag`
+  * can label a test class or test method
+  * the label has no effect until a test command uses it
+  * Maven Surefire can select tests by tag
+
+    ```shell
+    ./mvnw -Dgroups=customer test
+    ```
+
+  * this command runs tests tagged `customer`
+* shard contract
+  * defining a shard requires modifications in two places
+    * test code: assign a shard tag to the tests
+    * CI workflow: add the same shard name to the matrix
+  * both places must use exactly the same name
+  * each sharded test must have exactly one shard name
+* consistency check
+  * an automated test can detect differences between test tags and the CI matrix
+    * example
+      1. reads shard names from the workflow
+      1. reads tags from tests
+        * discovery behavior
+            * example
+                ```java
+                // search request in selected directories for compiled test classes
+                var request = LauncherDiscoveryRequestBuilder.request()
+                        .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
+                        .build();
+                
+                // contains the discovered tests, identifiers, and tags
+                var testPlan = LauncherFactory.create().discover(request);
+              
+                var tags = testPlan.getRoots().stream()
+                        // get all test classes and methods below each test-engine root
+                        // plan roots are the top-level test-engine nodes, ex.: JUnit Jupiter
+                        .flatMap(root -> testPlan.getDescendants(root).stream())
+                        // get the tags attached to each test
+                        .flatMap(test -> test.getTags().stream())
+                        // get each tag name
+                        .map(TestTag::getName)
+                        // remove duplicate tag names
+                        .collect(Collectors.toSet());
+                ```
+            * JUnit Platform asks each test engine to build a list of tests
+              * the test engine may load a test class to inspect its annotations and methods
+              * loading the class does not run its test methods
+                * the test engine may also initialize the class
+                    * a static initializer can start infrastructure
+                        * do not start infrastructure in static initializers
+                        * example
+                            ```
+                                      static PostgreSQLContainer<?> postgres =
+                                              new PostgreSQLContainer<>("postgres:17").start();
+                            ```
+            * * discovery runs test-engine code; it does not only read `.class` files
+                      * Spring Boot normally does not create the application context
+                      * Quarkus can perform augmentation and start Dev Services
+                      * discovery is not equivalent to reading class files without running test-framework code
+                      * with ordinary Spring Boot tests, discovery does not
+                        * execute `@SpringBootTest`
+                        * create the Spring `ApplicationContext`
+                        * run test lifecycle callbacks
+                        * start containers managed by the Testcontainers JUnit extension
+                      * Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
+                        * augmentation analyzes the application and its extensions
+                        * augmentation creates metadata and generated code required to run the application
+                        * Dev Services start during this phase
+                      * in such a Quarkus project, the consistency test may start Dev Services and containers
+                        * the check can become slow
+                        * the check can require Docker or external resources
+                        * the check can fail in a restricted environment        
+      1. compares the two sets of shard names

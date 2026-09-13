@@ -18,18 +18,7 @@
 
 ## Workshop purpose
 
-* demonstrates job-level test sharding with Java 21, Spring Boot 3.4.5, JUnit 5 tags, Maven Surefire, and a GitHub Actions matrix
-* contains four Spring Boot integration test classes
-  * `CustomerGreetingTest` uses `@CustomerShard`
-  * `OrderGreetingTest` uses `@OrderShard`
-  * `PaymentGreetingTest` uses `@PaymentShard`
-  * `UntaggedGreetingTest` has no tag and runs in the unsharded test job
-* each dedicated shard annotation combines `@Tag("sharded")` with a dedicated shard tag
-* tests without `@Tag("sharded")` run in the unsharded job
-* contains an untagged `TestShardConsistencyTest`
-  * compares dedicated shard tags with workflow shard names
-  * fails CI when a test marked `sharded` has no matching dedicated workflow shard
-  * fails CI when a workflow shard has no matching test tag
+* demonstrates job-level test sharding
 * each greeting test sleeps for 60 seconds to represent slow integration work
 * the payment test fails intentionally
   * a complete test run is therefore expected to fail
@@ -80,6 +69,10 @@
   * `--show-version`
     * writes the Maven and Java versions to the log
     * helps diagnose differences between developer and CI environments
+  * `--errors`
+    * writes Maven exception stack traces to the CI log
+    * used for dependency-resolution, plugin, or Maven execution failures
+        * ordinary test assertion failures are already available in the Surefire reports
 * test-selection properties
   * example: `./mvnw --batch-mode test "-Dgroups=sharded & customer"`
   * `groups`
@@ -87,51 +80,8 @@
     * example: `sharded & customer` selects tests carrying both tags
   * `excludedGroups`
     * excludes tests whose JUnit tags match an expression
-    * example: excluding `sharded` leaves tests for the unsharded catch-all job
   * `failIfNoTests`
     * fails the Maven command when the test selection is empty
-    * example: an unknown shard value must fail instead of producing a successful empty job
-* complete test suite without sharding
-
-  ```shell
-  ./mvnw --batch-mode --no-transfer-progress --show-version test
-  ```
-
-  * runs the complete test suite in one Maven process
-  * provides the approximately 240-second baseline used to measure the benefit of sharding
-  * expected to fail in this workshop because `PaymentGreetingTest` fails intentionally
-* dedicated shard job
-
-  ```shell
-  ./mvnw --batch-mode --no-transfer-progress --show-version test \
-    -DfailIfNoTests=true \
-    "-Dgroups=sharded & $SHARD"
-  ```
-
-  * the workflow sets `SHARD` to the current dedicated matrix value
-  * the tag expression selects tests assigned to that shard
-  * `failIfNoTests` rejects an empty shard
-* unsharded catch-all job
-
-  ```shell
-  ./mvnw --batch-mode --no-transfer-progress --show-version test \
-    -DfailIfNoTests=true \
-    -DexcludedGroups=sharded
-  ```
-
-  * runs tests that are not assigned to a dedicated shard
-  * `failIfNoTests` rejects an empty catch-all job
-* Maven failure diagnosis
-
-  ```shell
-  ./mvnw --batch-mode --no-transfer-progress --show-version --errors test \
-    -DfailIfNoTests=true \
-    "-Dgroups=sharded & $SHARD"
-  ```
-
-  * `--errors` writes Maven exception stack traces to the CI log
-  * use it for dependency-resolution, plugin, or Maven execution failures
-  * ordinary test assertion failures are already available in the Surefire reports
 
 ## GitHub Actions workflow
 
@@ -341,55 +291,52 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
     * CI workflow: add the same shard name to the matrix
   * both places must use exactly the same name
   * each sharded test must have exactly one shard name
-* consistency check
-  * an automated test can detect differences between test tags and the CI matrix
-  * example
-    1. reads shard names from the workflow
-    1. reads tags from tests
-       * discovery behavior
-         * example
-
-           ```java
-           // search request in selected directories for compiled test classes
-           var request = LauncherDiscoveryRequestBuilder.request()
-                   .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
-                   .build();
-
-           // contains the discovered tests, identifiers, and tags
-           var testPlan = LauncherFactory.create().discover(request);
-
-           var tags = testPlan.getRoots().stream()
-                   // get all test classes and methods below each test-engine root
-                   // plan roots are the top-level test-engine nodes, ex.: JUnit Jupiter
-                   .flatMap(root -> testPlan.getDescendants(root).stream())
-                   // get the tags attached to each test
-                   .flatMap(test -> test.getTags().stream())
-                   // get each tag name
-                   .map(TestTag::getName)
-                   // remove duplicate tag names
-                   .collect(Collectors.toSet());
-           ```
-
-         * JUnit Platform asks each test engine to build a list of tests
-           * the test engine may load a test class to inspect its annotations and methods
-            * loading the class does not run its test methods but triggers initialization
-             * a static initializer can start infrastructure
-                * example
+    * consistency check
+      * an automated test can detect differences between test tags and the CI matrix
+      * example
+        1. reads shard names from the workflow
+        1. reads tags from tests
+           * discovery behavior
+             * example
     
-                  ```
-                  static PostgreSQLContainer<?> postgres =
-                          new PostgreSQLContainer<>("postgres:17").start();
-                  ```
-
-         * discovery runs test-engine code
-            * in particular: it does not only read `.class` files
-            * example: Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
-                * augmentation analyzes the application and its extensions
-                * augmentation creates metadata and generated code required to run the application
-                * Dev Services start during this phase
-            * with ordinary Spring Boot tests, discovery does not
-                * execute `@SpringBootTest`
-                * create the Spring `ApplicationContext`
-                * run test lifecycle callbacks
-                * start containers managed by the Testcontainers JUnit extension
-    1. compares the two sets of shard names
+               ```java
+               // search request in selected directories for compiled test classes
+               var request = LauncherDiscoveryRequestBuilder.request()
+                       .selectors(selectClasspathRoots(Set.of(testClassesRoot)))
+                       .build();
+    
+               // contains the discovered tests, identifiers, and tags
+               var testPlan = LauncherFactory.create().discover(request);
+    
+               var tags = testPlan.getRoots().stream()
+                       // get all test classes and methods below each test-engine root
+                       // plan roots are the top-level test-engine nodes, ex.: JUnit Jupiter
+                       .flatMap(root -> testPlan.getDescendants(root).stream())
+                       // get the tags attached to each test
+                       .flatMap(test -> test.getTags().stream())
+                       // get each tag name
+                       .map(TestTag::getName)
+                       // remove duplicate tag names
+                       .collect(Collectors.toSet());
+               ```
+             * discovery runs test-engine code
+                * in particular: it does not only read `.class` files
+                * example
+                    * test engine may load a test class to inspect its annotations and methods
+                        * a static initializer can start infrastructure
+                           * example
+                        
+                             ```
+                             static PostgreSQLContainer<?> postgres =
+                                     new PostgreSQLContainer<>("postgres:17").start();
+                             ```
+                    * Quarkus 3.22 and later performs augmentation during discovery of `@QuarkusTest` classes
+                        * augmentation analyzes the application and its extensions
+                        * augmentation creates metadata and generated code required to run the application
+                        * Dev Services start during this phase
+                    * with ordinary Spring Boot tests, discovery does not
+                        * execute `@SpringBootTest`
+                        * create the Spring `ApplicationContext`
+                        * run test lifecycle callbacks
+                        * start containers managed by the Testcontainers JUnit extension
+        1. compares the two sets of shard names

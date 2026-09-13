@@ -171,6 +171,9 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
       * dependent jobs
         * `needs` creates an order between jobs
           * the dependent job is evaluated after the required jobs finish
+          * `needs.<job-id>.result` contains the result of a required job
+            * possible values are `success`, `failure`, `cancelled`, and `skipped`
+            * a dependent job can use the result to report or preserve a failure
           * `needs` does not transfer files between jobs
         * artifacts between dependent jobs
           * each job has a separate filesystem
@@ -224,9 +227,6 @@ Workflow: [`.github/workflows/test-shards.yml`](.github/workflows/test-shards.ym
       * the condition is evaluated after earlier steps in the same job
     * on a job with `needs`
       * the condition is evaluated after the required jobs finish
-    * `needs.<job-id>.result` contains the result of a required job
-      * possible values are `success`, `failure`, `cancelled`, and `skipped`
-      * a dependent job can use the result to report or preserve a failure
 * matrices and expressions
   * everything under `jobs.<job-id>` defines one job template
     * the job template uses `${{ matrix.<name> }}` as a placeholder for a value
